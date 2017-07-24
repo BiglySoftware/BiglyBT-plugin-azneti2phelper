@@ -1,2 +1,10 @@
 /.classpath
 /.project
+*.class
+*.DS_Store
+*.zip
+*.biglybt
+*.bak
+jbigi-*
+azi2pcore_*
+azneti2phelper*.jar
