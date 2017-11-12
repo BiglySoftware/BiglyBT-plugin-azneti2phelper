@@ -194,6 +194,8 @@ I2PHelperRouterDHT
 			        
 			        boolean	use_existing_key = dest_key_file.exists() && !force_new_address;
 			        
+			        boolean	tried_new_key = false;
+			        
 			        I2PSocketManager	sm = null;
 	
 			        while( true ){
@@ -228,7 +230,21 @@ I2PHelperRouterDHT
 							
 							if ( SystemTime.getMonotonousTime() - start > 15*60*1000 ){
 								
-								throw( new Exception( "Timeout creating socket manager" ));
+									// Seen borked key files causing us to get here as well
+									// delete key file and try once more
+								
+								if ( !tried_new_key ) {
+									
+									adapter.log( "Forcing new key" );
+									
+									tried_new_key = true;
+									
+									use_existing_key = false;
+									
+								}else{
+									
+									throw( new Exception( "Timeout creating socket manager" ));
+								}
 							}
 							
 							Thread.sleep( 5000 );

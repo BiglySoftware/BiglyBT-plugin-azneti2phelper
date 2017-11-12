@@ -1399,6 +1399,12 @@ I2PHelperRouter
 						
 						if ( SystemTime.getMonotonousTime() - start > 15*60*1000 ){
 							
+								// seen borked key causing us to get here eventually
+							
+							log( "Forcing new key on next startup" );
+							
+							dest_key_file.delete();
+							
 							throw( new Exception( "Timeout creating socket manager" ));
 						}
 						

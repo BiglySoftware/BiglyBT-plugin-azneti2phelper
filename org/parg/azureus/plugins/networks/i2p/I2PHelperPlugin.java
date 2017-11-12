@@ -263,8 +263,8 @@ I2PHelperPlugin
 		Fix the loading 
 		
 		LoadClientAppsJob - replace system class - 2 places
-                _cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
                 cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
+                _cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
 
 	*/
 	
@@ -4767,6 +4767,7 @@ I2PHelperPlugin
 		setUnloadable( false );
 		
 		if ( manual_tracker_dispatcher.getQueueSize() > 1024 ){
+			
 			 throw( new IPCException( "Queue to long" ));
 		}
 		
@@ -4792,6 +4793,7 @@ I2PHelperPlugin
 		throws IPCException
 	{
 		if ( manual_tracker_dispatcher.getQueueSize() > 1024 ){
+			
 			 throw( new IPCException( "Queue to long" ));
 		}
 		
@@ -4815,6 +4817,11 @@ I2PHelperPlugin
 		Map<String,Object>	options,
 		boolean				is_add )
 	{
+		if ( !plugin_enabled ){
+			
+			return;
+		}
+		
 		I2PDHTTrackerPlugin	tracker_plugin = null;
 	
 		while( true ){
@@ -4830,11 +4837,21 @@ I2PHelperPlugin
 					break;
 				}
 			}
+			
+			try{
+				
+				Thread.sleep(1000);
+				
+			}catch( Throwable e ){
+			}
 		}
 		
 		if ( is_add ){
+			
 			tracker_plugin.downloadAdded(download);
+			
 		}else{
+			
 			tracker_plugin.downloadRemoved(download);
 		}
 	}
