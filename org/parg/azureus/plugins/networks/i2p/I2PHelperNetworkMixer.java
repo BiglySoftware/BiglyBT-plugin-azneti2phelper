@@ -378,11 +378,8 @@ I2PHelperNetworkMixer
 		if ( existing_state != MS_MANUAL ){
 			
 			download.addAttributeListener( this, ta_networks, DownloadAttributeListener.WRITTEN );
-			
-			if ( mix_enabled ){
-				
-				checkMixedDownloads();
-			}
+							
+			checkMixedDownloads();
 		}
 		
 		addSRCode( download );
@@ -393,10 +390,7 @@ I2PHelperNetworkMixer
 	downloadRemoved(
 		Download	download )
 	{
-		if ( mix_enabled ){
-			
-			checkMixedDownloads();
-		}
+		checkMixedDownloads();
 		
 		removeSRCode( download );
 	}
@@ -611,6 +605,11 @@ I2PHelperNetworkMixer
 	handleIncomingSeedRequest(
 		Download		download )
 	{
+		if ( !seed_requests_enabled ){
+			
+			return;
+		}
+		
 		if ( !download.isPersistent()){
 			
 			return;
@@ -908,6 +907,11 @@ I2PHelperNetworkMixer
 		synchronized( this ){
 			
 			if ( destroyed ){
+				
+				return;
+			}
+			
+			if ( !mix_enabled ){
 				
 				return;
 			}
