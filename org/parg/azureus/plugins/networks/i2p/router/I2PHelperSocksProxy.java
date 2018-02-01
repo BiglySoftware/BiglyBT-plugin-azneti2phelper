@@ -1133,7 +1133,25 @@ I2PHelperSocksProxy
 																		throw( new IOException( "Socked closed" ));
 																	}
 																	
-																	headers.add( "Host: " + Base32.encode( peer_dest.calculateHash().getData()) + ".b32.i2p" );
+																	String target_host = bits[1];
+																	
+																	int port = 0;
+																	
+																	int	pos = target_host.indexOf( ':' );
+																	
+																	if ( pos != -1 ){
+																		
+																		port = Integer.parseInt( target_host.substring( pos+1 ));
+																	}
+																	
+																	String host_header =  "Host: " + Base32.encode( peer_dest.calculateHash().getData()) + ".b32.i2p";
+						
+																	if ( port > 0 ){
+																		
+																		host_header += ":" + port;
+																	}
+																	
+																	headers.add( host_header );
 																
 																}else if ( kw.equals( "USER-AGENT" )){
 	
