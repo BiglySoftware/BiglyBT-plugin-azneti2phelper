@@ -305,11 +305,26 @@ I2PHelperSocksProxy
 					
 				}else{
 					
-					String b32 = adapter.lookup( address );
+					String address_str = adapter.lookup( address );
 				
-					if ( b32 != null ){
+					if ( address_str != null ){
 						
-						remote_dest = socket_manager.getSession().lookupDest( b32, 30*1000 );
+						if ( address_str.length() < 400 ){
+							
+							remote_dest = socket_manager.getSession().lookupDest( address_str, 30*1000 );
+							
+						}else{
+							
+							remote_dest = new Destination();
+						       
+							try{
+								remote_dest.fromBase64( address_str );
+								
+							}catch( Throwable e ){
+								
+								remote_dest = null;
+							}
+						}
 					}
 				}
 			}

@@ -26,7 +26,21 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.io.*;
 
+import org.gudy.bouncycastle.util.encoders.Base64;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperPlugin;
+
+import com.biglybt.core.util.AENetworkClassifier;
+import com.biglybt.core.util.BDecoder;
+import com.biglybt.core.util.Debug;
+import com.biglybt.core.util.SimpleTimer;
+import com.biglybt.core.util.SystemTime;
+import com.biglybt.core.util.TimerEvent;
+import com.biglybt.core.util.TimerEventPerformer;
+import com.biglybt.plugin.net.buddy.BuddyPluginUtils;
+import com.biglybt.util.MapUtils;
+import com.biglybt.plugin.net.buddy.BuddyPluginBeta.ChatAdapter;
+import com.biglybt.plugin.net.buddy.BuddyPluginBeta.ChatInstance;
+import com.biglybt.plugin.net.buddy.BuddyPluginBeta.ChatMessage;
 
 import net.i2p.data.Base32;
 import net.i2p.data.Destination;
@@ -34,41 +48,272 @@ import net.i2p.data.Destination;
 public class 
 I2PHelperHostnameService 
 {
-	private I2PHelperPlugin		plugin;
-	private File				hosts;
+		// Note that http://inr.i2p/export/alive-hosts.txt is a good source for updating hosts.txt as well
 	
-	private Map<String,String>	cache = new HashMap<String, String>();
+		// also parse jump response: http://inr.i2p/<hostname>.i2p -> address
+	
+	private I2PHelperPlugin		plugin;
+	private File				i2hostetag_file;
+	private File				dnsfeed_file;
+	
+	private Map<String,String>	result_cache = new HashMap<String, String>();
+	
+	private Map<String,String>	dnsfeed_cache = new HashMap<String, String>();
 	
 	public
 	I2PHelperHostnameService(
 		I2PHelperPlugin		_plugin,
 		File				plugin_dir )
 	{
-		plugin	= _plugin;
-		hosts 	= new File( plugin_dir, "i2hostetag.b32.txt" );
+		plugin				= _plugin;
+		i2hostetag_file 	= new File( plugin_dir, "i2hostetag.b32.txt" );
+		dnsfeed_file	 	= new File( plugin_dir, "dnsfeed.txt" );
+		
+		SimpleTimer.addEvent(
+			"init",
+			SystemTime.getOffsetTime( 60*1000 ),
+			new TimerEventPerformer(){
+				
+				@Override
+				public void perform(TimerEvent event){
+					try{
+						Map<String,Object>	options = new HashMap<String, Object>();
+						
+						options.put( ChatInstance.OPT_INVISIBLE, true );
+														
+						final ChatInstance chat = 
+								BuddyPluginUtils.getChat(
+									AENetworkClassifier.AT_PUBLIC, 
+									"BiglyBT: I2P: DNS Feed[pk=AS3W2WHFGFQMD2KU7Z2YD2IMYIZJ5RG34AW4URPKPQ7NJRCZKJU2PDR4IGGECFLJMOQMARA72SDJ42Y&ro=1]",
+									options );
+
+						chat.setSharedNickname( false );
+						
+						chat.setSaveMessages( true );
+						
+						chat.addListener(
+							new ChatAdapter()
+							{
+								@Override
+								public void 
+								messageReceived(
+									ChatMessage 	msg,
+									boolean			sort_outstanding )
+								{
+									receiveDNSFeedMessage( msg );
+								}
+							});
+						
+						List<ChatMessage>	messages = chat.getMessages();
+						
+						for ( ChatMessage msg: messages ){
+							
+							receiveDNSFeedMessage( msg );
+						}
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+			});
+		
+		SimpleTimer.addPeriodicEvent(
+			"tidy",
+			2*60*1000,
+			new TimerEventPerformer(){
+				
+				@Override
+				public void perform(TimerEvent event){
+				
+					synchronized( I2PHelperHostnameService.this ){
+						
+						dnsfeed_cache = null;
+					}
+				}
+			});
 	}
 
 	public String
 	lookup(
 		String 	_hostname )
 	{
-		if ( !hosts.exists()){
-			
-			return( null );
-		}
-		
 		String hostname = _hostname.toLowerCase( Locale.US );
-			
+		
 		if ( !hostname.endsWith( ".i2p" )){
 			
 			return( null );
 		}
+
+		String result = lookupDNSFeed( hostname );
+		
+		if ( result != null ){
+			
+			return( result );
+		}
+		
+		return( lookupI2hostetag( hostname ));
+	}
+	
+	private Map<String,String>
+	loadDNSFeedCache()
+	{
+		synchronized( this ){
+						
+			if ( dnsfeed_cache == null ){
+				
+				dnsfeed_cache = new HashMap<>();
+				
+				if ( dnsfeed_file.exists()){				
+	
+					try{
+						LineNumberReader	lnr = new LineNumberReader( new FileReader( dnsfeed_file ));
+						
+						try{
+							while( true ){
+								
+								String line = lnr.readLine();
+								
+								if ( line == null ){
+									
+									break;
+								}
+								
+								line = line.trim();
+								
+								if ( line.startsWith( "#" )){
+									
+									continue;
+								}
+								
+								String[] bits = line.split( "=", 2 );
+								
+								if ( bits.length == 2 ){
+									
+									dnsfeed_cache.put( bits[0],  bits[1] );
+								}
+							}
+						}catch( Throwable e ){
+							
+							Debug.out( e );
+							
+						}finally{
+							
+							lnr.close();
+						}
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+			}
+			
+			return( dnsfeed_cache );
+		}
+	}
+	
+	private void
+	receiveDNSFeedMessage(
+		ChatMessage		msg )
+	{
+		if ( msg.getMessageType() != ChatMessage.MT_NORMAL ){
+			
+			return;
+		}
+		
+		try{
+			Map map = BDecoder.decode( msg.getRawMessage());
+					
+			String host = MapUtils.getMapString(map, "h", null );
+			
+			byte[] dest_bytes = (byte[])map.get( "a" );
+			
+			String dest_str = new String( Base64.encode( dest_bytes ), "UTF-8" );
+			
+			dest_str = dest_str.replace('/', '~');
+			dest_str = dest_str.replace('+', '-');
+			
+			if ( host.endsWith( ".i2p" )){
+				
+				host = host.substring( 0, host.length() - 4 );
+				
+				synchronized( this ){
+					
+					Map<String,String> cache = loadDNSFeedCache();
+					
+					String existing = cache.get( host );
+					
+					if ( existing != null && existing.equals( dest_str )){
+						
+						return;
+					}
+						
+					PrintWriter pw = new PrintWriter( new OutputStreamWriter( new FileOutputStream( dnsfeed_file.getAbsolutePath(), true ), "UTF-8" ));
+						
+					pw.println( host + "=" + dest_str );
+						
+					pw.close();
+						
+					cache.put( host, dest_str );
+					
+					result_cache.put( host, dest_str );
+				}
+			}
+			
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+		}
+	}
+	
+	private String
+	lookupDNSFeed(
+		String	hostname )
+	{
+		synchronized( this ){
+			
+			if ( !dnsfeed_file.exists()){
+				
+				return( null );
+			}
+				
+			hostname = hostname.substring( 0, hostname.length() - 4 );
+		
+			String result = result_cache.get( hostname );
+			
+			if ( result != null ){
+				
+				return( result );
+			}
+			
+			Map<String,String> cache = loadDNSFeedCache();
+				
+			result = cache.get( hostname );
+				
+			if ( result != null ){
+							
+				result_cache.put( hostname, result );
+				
+				plugin.log( "Resolved " + hostname + " to " + result.substring( 0, 32 ) + "..." );
+			}
+			
+			return( result );
+		}
+	}
+	
+	private String
+	lookupI2hostetag(
+		String	hostname )
+	{
+		if ( !i2hostetag_file.exists()){
+			
+			return( null );
+		}	
 		
 		hostname = hostname.substring( 0, hostname.length() - 4 );
 		
 		synchronized( this ){
 			
-			String existing = cache.get( hostname );
+			String existing = result_cache.get( hostname );
 			
 			if ( existing != null ){
 				
@@ -76,7 +321,7 @@ I2PHelperHostnameService
 			}
 			
 			try{
-				LineNumberReader	lnr = new LineNumberReader( new FileReader( hosts ));
+				LineNumberReader	lnr = new LineNumberReader( new FileReader( i2hostetag_file ));
 				
 				try{
 					while( true ){
@@ -105,9 +350,9 @@ I2PHelperHostnameService
 								
 								String result = bits[1] + ".b32.i2p";
 								
-								cache.put( hostname, result );
+								result_cache.put( hostname, result );
 								
-								plugin.log( "Resolved " + _hostname + " to " + result );
+								plugin.log( "Resolved " + hostname + " to " + result );
 								
 								return( result );
 							}
