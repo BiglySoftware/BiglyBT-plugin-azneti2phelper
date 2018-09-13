@@ -94,6 +94,10 @@ I2PHelperRouter
 	public static final int		PARAM_FLOODFILL_CONTROL_I2P		= 1;
 	public static final int		PARAM_FLOODFILL_CONTROL_ON		= 2;
 	public static final int		PARAM_FLOODFILL_CONTROL_OFF		= 3;
+	
+	public static final int 	MAX_HOPS 	= 7;
+	public static final int 	MAX_TUNNELS = 16;
+	
 		// mix defaults
 	
 	public static final String	PARAM_MIX_ENABLED					= "azi2phelper.mix.enabled";
