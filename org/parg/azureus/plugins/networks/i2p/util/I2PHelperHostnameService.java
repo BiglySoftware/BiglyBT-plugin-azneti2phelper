@@ -58,7 +58,7 @@ I2PHelperHostnameService
 	
 	private Map<String,String>	result_cache = new HashMap<String, String>();
 	
-	private Map<String,String>	dnsfeed_cache = new HashMap<String, String>();
+	private Map<String,String>	dnsfeed_cache = null;
 	
 	public
 	I2PHelperHostnameService(
@@ -164,8 +164,12 @@ I2PHelperHostnameService
 				dnsfeed_cache = new HashMap<>();
 				
 				if ( dnsfeed_file.exists()){				
-	
+
+					Set<Integer>	dup_lines = new HashSet<>();
+					
 					try{
+						int	line_number = 0;
+						
 						LineNumberReader	lnr = new LineNumberReader( new FileReader( dnsfeed_file ));
 						
 						try{
@@ -178,6 +182,8 @@ I2PHelperHostnameService
 									break;
 								}
 								
+								line_number++;
+								
 								line = line.trim();
 								
 								if ( line.startsWith( "#" )){
@@ -189,7 +195,15 @@ I2PHelperHostnameService
 								
 								if ( bits.length == 2 ){
 									
-									dnsfeed_cache.put( bits[0],  bits[1] );
+									String host = bits[0];
+									String dest	= bits[1];
+									
+									String existing = dnsfeed_cache.put( host,  dest );
+										
+									if ( existing != null && existing.equals( dest )){
+										
+										dup_lines.add( line_number );
+									}
 								}
 							}
 						}catch( Throwable e ){
@@ -199,6 +213,80 @@ I2PHelperHostnameService
 						}finally{
 							
 							lnr.close();
+						}
+						
+						if ( !dup_lines.isEmpty()){
+							
+							line_number = 0;
+						
+							File tmp_file = new File( dnsfeed_file.getParentFile(), dnsfeed_file.getName() + ".tmp" );
+							
+							tmp_file.delete();
+															
+							lnr = new LineNumberReader( new FileReader( dnsfeed_file ));
+								
+							PrintWriter pw = new PrintWriter( new OutputStreamWriter( new FileOutputStream( tmp_file, false ), "UTF-8" ));
+								
+							try{
+								while( true ){
+									
+									String line = lnr.readLine();
+									
+									if ( line == null ){
+										
+										break;
+									}
+									
+									line_number++;
+									
+									line = line.trim();
+									
+									if ( !dup_lines.contains( line_number )){
+										
+										pw.println( line );
+									}
+								}
+								
+								
+								pw.close();
+								
+								pw = null;
+								
+								lnr.close();
+								
+								lnr = null;
+
+								dnsfeed_file.delete();
+								
+								tmp_file.renameTo( dnsfeed_file );
+								
+							}catch( Throwable e ){
+								
+								Debug.out( e );
+								
+							}finally{
+								
+								if ( lnr != null ){
+									try{
+										lnr.close();
+									}catch( Throwable e ){
+										Debug.out( e );
+									}
+								}
+								
+								if ( pw != null ){
+									try{
+										pw.close();
+									}catch( Throwable e ){
+										Debug.out( e );
+									}
+								}
+								
+								if ( tmp_file.exists()){
+									
+									tmp_file.delete();
+								}
+							}
 						}
 					}catch( Throwable e ){
 						
