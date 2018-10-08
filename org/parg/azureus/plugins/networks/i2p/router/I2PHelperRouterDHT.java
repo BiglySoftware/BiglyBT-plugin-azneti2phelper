@@ -165,7 +165,7 @@ I2PHelperRouterDHT
 		
 		sm_properties.putAll( _sm_properties );
 		
-		router.setupSMExplicitOpts( sm_properties, Constants.APP_NAME + " DHT: " + name, dht_index==0?I2PHelperRouter.SM_TYPE_MIX:I2PHelperRouter.SM_TYPE_PURE );
+		router.setupSMExplicitOpts( sm_properties, Constants.APP_NAME + ": DHT " + name, dht_index==0?I2PHelperRouter.SM_TYPE_MIX:I2PHelperRouter.SM_TYPE_PURE );
 
 		try{
 			synchronized( init_lock ){

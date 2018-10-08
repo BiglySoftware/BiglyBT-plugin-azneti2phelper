@@ -29,6 +29,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.NoRouteToHostException;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.ByteBuffer;
@@ -776,7 +777,8 @@ I2PHelperSocksProxy
 									
 									boolean ignore = false;
 									
-									if ( e instanceof ClosedChannelException  ){
+									if ( 	e instanceof ClosedChannelException ||
+											e instanceof SocketTimeoutException ){
 										
 										ignore = true;
 										
