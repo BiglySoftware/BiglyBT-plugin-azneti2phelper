@@ -42,9 +42,7 @@ import java.net.Socket;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.channels.ServerSocketChannel;
-
-
-
+import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -61,6 +59,7 @@ import net.i2p.I2PAppContext;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketManager;
 import net.i2p.client.streaming.I2PSocketOptions;
+import net.i2p.client.streaming.impl.MessageInputStream.ActivityListener;
 import net.i2p.data.Base32;
 import net.i2p.data.Base64;
 import net.i2p.data.Destination;
@@ -258,6 +257,56 @@ I2PHelperPlugin
 		    }
 		    
 		
+		Make message input stream sorta event driven
+		------------------------------
+		
+		MessageInputStream - add stuff at bottom and replace all calls to .notifyAll with method call to notifyActivity
+		
+		    private ActivityListener	activity_listener;
+
+		    public void
+		    setActivityListener(
+		    	ActivityListener		l )
+		    {
+		    	synchronized (_dataLock) {
+		    		
+		    		activity_listener	= l;
+		    	}
+		    }
+		    
+		    public void 
+		    notifyActivity() 
+		    {
+		    	synchronized (_dataLock) {
+		    		
+		    		_dataLock.notifyAll(); 
+		    		
+		    		if ( activity_listener != null ){
+		    			
+		    			try{
+		    				activity_listener.activityOccurred();
+		    				
+		    			}catch( Throwable e ){
+		    				
+		    				e.printStackTrace();
+		    			}
+		    		}
+		    	} 
+		    }
+		
+		    
+		    public interface
+		    ActivityListener
+		    {
+		    	public void
+		    	activityOccurred();
+		    }
+    
+    
+    		5 locations - _dataLock.notifyAll() -> notifyActivity()
+    		+++++++++++
+    		
+		
 		Router Console app
 		------------------
 		Fix the loading 
@@ -431,6 +480,8 @@ I2PHelperPlugin
 	private I2PHelperDHTBridge	dht_bridge	= new I2PHelperDHTBridge( this );
 	
 	private I2PHelperHostnameService	hostname_service;
+	
+	private I2PHelperSocketForwarder	socket_forwarder = new I2PHelperSocketForwarder();
 	
 	private static final int CPU_THROTTLE_DEFAULT	= 2;
 	
@@ -3260,6 +3311,8 @@ I2PHelperPlugin
 		return( hostname_service.lookup( address ));
 	}
 	
+	private static final boolean OLD_STYLE_FORWARD = false;
+	
 	private void
 	forwardSocket(
 		I2PHelperRouterDHT			dht,
@@ -3268,8 +3321,19 @@ I2PHelperPlugin
 		int							target_port )
 			
 		throws Exception
-	{
-		Socket vuze_socket = new Socket( Proxy.NO_PROXY );
+	{		
+		Socket bigly_socket;
+		
+		if ( OLD_STYLE_FORWARD ){
+			
+			bigly_socket = new Socket( Proxy.NO_PROXY );
+			
+		}else{
+			
+			SocketChannel channel = SocketChannel.open();
+
+			bigly_socket = channel.socket();
+		}
 		
 		try{
 			Destination dest = i2p_socket.getPeerDestination();
@@ -3298,9 +3362,9 @@ I2PHelperPlugin
 					dest_map.put( peer_ip, dest );
 				}
 				
-				vuze_socket.bind( null );
+				bigly_socket.bind( null );
 				
-				final int local_port = vuze_socket.getLocalPort();
+				final int local_port = bigly_socket.getLocalPort();
 				
 					// we need to pass the peer_ip to the core so that it doesn't just see '127.0.0.1'
 				
@@ -3328,9 +3392,9 @@ I2PHelperPlugin
 						bind = InetAddress.getByName( "127.0.0.1" );
 					}
 					
-					vuze_socket.connect( new InetSocketAddress( bind, target_port));
+					bigly_socket.connect( new InetSocketAddress( bind, target_port));
 				
-					vuze_socket.setTcpNoDelay( true );
+					bigly_socket.setTcpNoDelay( true );
 					
 					Runnable	on_complete = 
 						new Runnable()
@@ -3366,10 +3430,8 @@ I2PHelperPlugin
 							}
 						};
 						
-					runPipe( i2p_socket.getInputStream(), vuze_socket.getOutputStream(), on_complete );
-				
-					runPipe( vuze_socket.getInputStream(), i2p_socket.getOutputStream(), on_complete );
-				
+					forwardSocket( i2p_socket, bigly_socket, on_complete );
+										
 					ok = true;
 					
 				}finally{
@@ -3401,16 +3463,32 @@ I2PHelperPlugin
 			}catch( Throwable f ){		
 			}
 			
-			if ( vuze_socket != null ){
+			if ( bigly_socket != null ){
 				
 				try{
-					vuze_socket.close();
+					bigly_socket.close();
 					
 				}catch( Throwable f ){
 				}
 			}
 		}
 	}
+	
+	private void
+	forwardSocket(
+		I2PSocket	i2p_socket,
+		Socket		bigly_socket,
+		Runnable	on_complete )
+	
+		throws Exception
+	{
+		//runPipe( i2p_socket.getInputStream(), bigly_socket.getOutputStream(), on_complete );
+		
+		//runPipe( bigly_socket.getInputStream(), i2p_socket.getOutputStream(), on_complete );
+	
+		socket_forwarder.forward( i2p_socket, bigly_socket, on_complete );
+	}
+	
 	
 	private I2PHelperTracker
 	getTracker(
@@ -5013,6 +5091,13 @@ I2PHelperPlugin
 					timer_event.cancel();
 					
 					timer_event = null;
+				}
+				
+				if ( socket_forwarder != null ){
+					
+					socket_forwarder.destroy();
+					
+					socket_forwarder = null;
 				}
 			}
 		}finally{

@@ -25,7 +25,6 @@ package org.parg.azureus.plugins.networks.i2p.router;
 
 import java.io.EOFException;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.NoRouteToHostException;
@@ -50,6 +49,8 @@ import net.i2p.client.naming.NamingService;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketManager;
 import net.i2p.client.streaming.I2PSocketOptions;
+import net.i2p.client.streaming.impl.MessageInputStream;
+import net.i2p.client.streaming.impl.MessageInputStream.ActivityListener;
 import net.i2p.data.Base32;
 import net.i2p.data.Destination;
 
@@ -442,6 +443,10 @@ I2PHelperSocksProxy
 		}
 	}
 	
+	protected static ThreadPool			async_read_pool 	= new ThreadPool( "I2PSocket async read", 10, true );
+	protected static ThreadPool			async_write_pool 	= new ThreadPool( "I2PSocket async write", 10, true );
+
+	
 	private class
 	SOCKSProxyConnection
 		implements AESocksProxyPlugableConnection
@@ -697,21 +702,26 @@ I2PHelperSocksProxy
 		{
 			private static final boolean LOG_CONTENT = false;
 			
-			protected AEProxyConnection		connection;
-			protected ByteBuffer			source_buffer;
-			protected ByteBuffer			target_buffer;
+			AEProxyConnection		connection;
+			ByteBuffer				source_buffer;
 			
-			protected SocketChannel			source_channel;
+			volatile ByteBuffer		target_buffer;
 			
-			protected InputStream			input_stream;
-			protected OutputStream			output_stream;
+			SocketChannel			source_channel;
 			
-			protected long					outward_bytes	= 0;
-			protected long					inward_bytes	= 0;
+			MessageInputStream		input_stream;
+			OutputStream			output_stream;
 			
-			protected AESemaphore			write_sem = new AESemaphore( "I2PSocket write sem" );
+			long					outward_bytes	= 0;
+			long					inward_bytes	= 0;
+				
+			byte[]		i2p_input_buffer = new byte[RELAY_BUFFER_SIZE];
+			boolean		i2p_read_active;
+			boolean		i2p_read_deferred;
 			
-			protected ThreadPool			async_pool = new ThreadPool( "I2PSocket async", 2 );
+			boolean 	i2p_read_dead;
+
+			Object lock = new Object();
 			
 			protected
 			proxyStateRelayData(
@@ -725,9 +735,11 @@ I2PHelperSocksProxy
 				
 				source_buffer	= ByteBuffer.allocate( RELAY_BUFFER_SIZE );
 				
-				input_stream 	= socket.getInputStream();
+				input_stream 	= (MessageInputStream)socket.getInputStream();
 				output_stream 	= socket.getOutputStream();
 
+				input_stream.setReadTimeout( 0 );	// non-blocking
+				
 				connection.setReadState( this );
 				
 				connection.setWriteState( this );
@@ -736,87 +748,163 @@ I2PHelperSocksProxy
 							
 				connection.setConnected();
 				
-				async_pool.run(
+				input_stream.setActivityListener(
+					new ActivityListener(){
+						
+						@Override
+						public void 
+						activityOccurred()
+						{
+							readFromI2P();
+						}
+					});
+				
+				readFromI2P();
+			}
+			
+			private void
+			readFromI2P()
+			{
+				synchronized( lock ){
+					
+					if ( i2p_read_dead ){
+						
+						return;
+					}
+					
+					if ( i2p_read_active || target_buffer != null ){
+						
+						i2p_read_deferred = true;
+						
+						return;
+					}
+					
+					i2p_read_active = true;
+				}
+				
+				async_read_pool.run(
 					new AERunnable()
 					{
 						@Override
 						public void
 						runSupport()
-						{
-							byte[]	buffer = new byte[RELAY_BUFFER_SIZE];
-							
-							
-							while( !connection.isClosed()){
-							
-								try{
-									trace( "I2PCon: " + getStateName() + " : read Starts <- I2P " );
+						{	
+							boolean	went_async = false;
 
-									long	start = System.currentTimeMillis();
-									
-									int	len = input_stream.read( buffer );
-									
-									if ( len <= 0 ){
+							try{											
+								while( !connection.isClosed()){
+								
+									try{
+										trace( "I2PCon: " + getStateName() + " : read Starts <- I2P " );
+	
+										long	start = System.currentTimeMillis();
+										
+										int	len = input_stream.read( i2p_input_buffer );
+										
+										if ( len == 0 ){
+											
+											synchronized( lock ){
+												
+												if ( !i2p_read_deferred ){
+											
+													went_async = true;
+													
+													return;
+												}
+												
+												i2p_read_deferred = false;
+											}
+											
+											continue;
+										}
+										
+										if ( len < 0 ){
+											
+											throw( new IOException( "Connection closed" ));
+										}
+																	
+										trace( "I2PCon: " + getStateName() + " : read Done <- I2P - " + len + ", elapsed = " + ( System.currentTimeMillis() - start ));
+										
+										if ( target_buffer != null ){
+											
+											Debug.out("I2PluginConnection: target buffer should be null" );
+										}
+										
+										// System.out.println( new String( buffer, 0, len ));
+										
+										target_buffer = ByteBuffer.wrap( i2p_input_buffer, 0, len );
+										
+										read();
+											
+										if ( target_buffer != null ){
+											
+											went_async = true;
+											
+											return;
+										}
+									}catch( Throwable e ){
+										
+										boolean ignore = false;
+										
+										if ( 	e instanceof ClosedChannelException ||
+												e instanceof SocketTimeoutException ){
+											
+											ignore = true;
+											
+										}else if ( e instanceof IOException ){
+											
+											String message = Debug.getNestedExceptionMessage( e );
+											
+											if ( message != null ){
+												
+												message = message.toLowerCase( Locale.US );
+											
+												if (	message.contains( "closed" ) ||
+														message.contains( "aborted" ) ||
+														message.contains( "disconnected" ) ||
+														message.contains( "reset" )){
+										
+													ignore = true;
+												}
+											}
+										}
+										
+										if ( !ignore ){
+											
+											Debug.out( e );
+										}
 										
 										break;
 									}
-																
-									trace( "I2PCon: " + getStateName() + " : read Done <- I2P - " + len + ", elapsed = " + ( System.currentTimeMillis() - start ));
-									
-									if ( target_buffer != null ){
-										
-										Debug.out("I2PluginConnection: target buffer should be null" );
-									}
-									
-									// System.out.println( new String( buffer, 0, len ));
-									
-									target_buffer = ByteBuffer.wrap( buffer, 0, len );
-									
-									read();
-									
-								}catch( Throwable e ){
-									
-									boolean ignore = false;
-									
-									if ( 	e instanceof ClosedChannelException ||
-											e instanceof SocketTimeoutException ){
-										
-										ignore = true;
-										
-									}else if ( e instanceof IOException ){
-										
-										String message = Debug.getNestedExceptionMessage( e );
-										
-										if ( message != null ){
-											
-											message = message.toLowerCase( Locale.US );
-										
-											if (	message.contains( "closed" ) ||
-													message.contains( "aborted" ) ||
-													message.contains( "disconnected" ) ||
-													message.contains( "reset" )){
-									
-												ignore = true;
-											}
-										}
-									}
-									
-									if ( !ignore ){
-										
-										Debug.out( e );
-									}
-									
-									break;
 								}
-							}
-							
-							if ( !proxy_connection.isClosed()){
 								
-								try{
-									proxy_connection.close();
+								if ( !proxy_connection.isClosed()){
 									
-								}catch( IOException e ){
+									try{
+										proxy_connection.close();
+										
+									}catch( IOException e ){
+										
+										Debug.printStackTrace(e);
+									}
+								}
+							}finally{
+							
+								synchronized( lock ){
 									
-									Debug.printStackTrace(e);
+									i2p_read_active = false;
+									
+									if (!went_async ){
+										
+										i2p_read_dead = true;
+									}
+									
+									if ( i2p_read_deferred ){
+										
+										i2p_read_deferred = false;
+										
+										readFromI2P();
+									}
 								}
 							}
 						}
@@ -827,8 +915,6 @@ I2PHelperSocksProxy
 			close()
 			{						
 				trace( "I2PCon: " + getStateName() + " close" );
-				
-				write_sem.releaseForever();
 			}
 			
 			protected void
@@ -854,10 +940,10 @@ I2PHelperSocksProxy
 				
 					connection.requestWriteSelect( source_channel );
 					
-					write_sem.reserve();
-				}
+				}else{
 				
-				target_buffer	= null;
+					target_buffer	= null;
+				}
 			}
 			
 			@Override
@@ -898,7 +984,7 @@ I2PHelperSocksProxy
 							// offload the write to separate thread as can't afford to block the
 							// proxy
 					
-						async_pool.run(
+						async_write_pool.run(
 							new AERunnable()
 							{
 								@Override
@@ -1221,7 +1307,7 @@ I2PHelperSocksProxy
 										
 										source_buffer.limit( source_buffer.capacity());
 										
-										output_stream.flush();
+										// output_stream.flush();
 										
 										trace( "I2PCon: " + getStateName() + " : write done -> I2P - " + len + ", elapsed = " + ( System.currentTimeMillis() - start ));
 										
@@ -1266,15 +1352,18 @@ I2PHelperSocksProxy
 						
 					}else{
 						
-						write_sem.release();
+						synchronized( lock ){
+							
+							target_buffer = null;
+							
+							readFromI2P();
+						}
 					}
 					
 					return( written > 0 );
 					
 				}catch( Throwable e ){
-					
-					write_sem.release();
-					
+										
 					if (e instanceof IOException ){
 						
 						throw((IOException)e);

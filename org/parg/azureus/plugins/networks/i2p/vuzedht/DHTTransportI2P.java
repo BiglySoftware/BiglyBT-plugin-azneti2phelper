@@ -59,6 +59,7 @@ import net.i2p.client.I2PSessionMuxedListener;
 import net.i2p.client.SendMessageOptions;
 import net.i2p.client.datagram.I2PDatagramDissector;
 import net.i2p.client.datagram.I2PDatagramMaker;
+import net.i2p.client.datagram.I2PInvalidDatagramException;
 import net.i2p.data.Base32;
 import net.i2p.data.DataFormatException;
 import net.i2p.data.Destination;
@@ -2288,6 +2289,11 @@ DHTTransportI2P
 	        	
 	        	if ( TRACE ) trace( "unmatched port: " + to_port + " (" + query_port + "/" + reply_port + ")");
 	        }
+	        
+    	}catch( I2PInvalidDatagramException e ){
+    		
+    		// can get these on address changes it seems
+    		
     	}catch( Throwable e ){
     		
     		Debug.out( e );
