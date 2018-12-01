@@ -32,8 +32,11 @@ import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.AESemaphore;
 import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.Debug;
+import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.ThreadPool;
+import com.biglybt.core.util.TimerEvent;
+import com.biglybt.core.util.TimerEventPerformer;
 
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.impl.MessageInputStream;
@@ -48,7 +51,9 @@ I2PHelperSocketForwarder
 	private VirtualChannelSelector	read_selector;
 	private VirtualChannelSelector	write_selector;
 
-	private List<ForwardingActivity>	activities = new ArrayList<>();
+	private Set<ForwardingActivity>	activities = new HashSet<>();
+	
+	private TimerEvent			tidy_event;
 	
 	private volatile int		activation_count;
 	
@@ -73,13 +78,11 @@ I2PHelperSocketForwarder
 			if ( read_selector == null ){
 				
 				read_selector	 	= new VirtualChannelSelector( "I2PForwarder:read", VirtualChannelSelector.OP_READ, false );
-				write_selector 		= new VirtualChannelSelector( "I2PForwarder:write", VirtualChannelSelector.OP_WRITE, true );
 				
 				AESemaphore sem = new AESemaphore( "init" );
 				
-				AEThread2	read_thread =
-					new AEThread2( "I2PForwarder:read")
-					{
+				new AEThread2( "I2PForwarder:read"){
+					
 						@Override
 						public void
 						run()
@@ -90,13 +93,12 @@ I2PHelperSocketForwarder
 							
 							selectLoop( ac, read_selector );
 						}
-					};
+					}.start();
 
-				read_thread.start();
+				write_selector 		= new VirtualChannelSelector( "I2PForwarder:write", VirtualChannelSelector.OP_WRITE, true );
 
-				AEThread2	write_thread =
-					new AEThread2( "I2PForwarder:write")
-					{
+				new AEThread2( "I2PForwarder:write"){
+					
 						@Override
 						public void
 						run()
@@ -107,9 +109,7 @@ I2PHelperSocketForwarder
 							
 							selectLoop( ac, write_selector );
 						}
-					};
-
-				write_thread.start();
+					}.start();
 				
 				sem.reserve();
 				sem.reserve();
@@ -118,6 +118,13 @@ I2PHelperSocketForwarder
 			activity = new ForwardingActivity( i2p_socket, bigly_socket, on_complete );
 			
 			activities.add( activity );
+			
+			if ( tidy_event != null ){
+				
+				tidy_event.cancel();
+				
+				tidy_event = null;
+			}
 		}
 		
 		activity.start();
@@ -134,16 +141,37 @@ I2PHelperSocketForwarder
 				activities.remove( a );
 				
 				if ( activities.isEmpty()){
+						
+					if ( tidy_event != null ){
+						
+						tidy_event.cancel();
+					}
 					
-					read_selector.destroy();
-					
-					read_selector = null;
-					
-					write_selector.destroy();
-					
-					write_selector = null;
-					
-					activation_count++;
+					tidy_event = 
+						SimpleTimer.addEvent(
+							"tidy",
+							SystemTime.getOffsetTime( 30*1000 ),
+							new TimerEventPerformer(){
+								
+								@Override
+								public void perform(TimerEvent event){
+								
+									synchronized( I2PHelperSocketForwarder.this ){
+										
+										if ( activities.isEmpty()){
+											
+											read_selector = null;
+											
+											write_selector = null;
+											
+												// this will destroy the selectors
+											
+											activation_count++;
+										}
+									}
+								}
+							});
+						
 				}
 			}
 		}
@@ -156,32 +184,37 @@ I2PHelperSocketForwarder
 	{
 		long	last_time	= 0;
 
-		while( !destroyed && activation_count == ac ){
-
-			try{
-				selector.select( 100 );
-
-					// only use one selector to trigger the timeouts!
-
-				if ( selector == read_selector ){
-
-					long	now = SystemTime.getCurrentTime();
-
-					if ( now < last_time ){
-
-						last_time	= now;
-
-					}else if ( now - last_time >= 10*1000 ){
-
-						last_time	= now;
-
-						checkTimeouts( now );
+		try{
+			while( !destroyed && activation_count == ac ){
+	
+				try{
+					selector.select( 100 );
+	
+						// only use one selector to trigger the timeouts!
+	
+					if ( selector == read_selector ){
+	
+						long	now = SystemTime.getMonotonousTime();
+	
+						if ( now - last_time >= 30*1000 ){
+	
+							last_time	= now;
+	
+							checkTimeouts( now );
+						}
 					}
+				}catch( Throwable e ){
+	
+					Debug.printStackTrace(e);
 				}
-			}catch( Throwable e ){
-
-				Debug.printStackTrace(e);
 			}
+		}finally{
+			
+			selector.destroy();
+			
+				// we have to run one final 'select' operation to destroy the selector...
+			
+			selector.select( 100 );
 		}
 	}
 	
@@ -189,17 +222,23 @@ I2PHelperSocketForwarder
 	checkTimeouts(
 		long	now )
 	{
-		/*
+		List<ForwardingActivity>	to_destroy = new ArrayList<>();
+		
 		synchronized( this ){
-			
-			System.out.println( "active=" + activities.size());
 			
 			for ( ForwardingActivity a: activities ){
 				
-				System.out.println( "    " + a.getString());
+				if ( a.timeout()){
+					
+					to_destroy.add( a );
+				}
 			}
 		}
-		*/
+		
+		for ( ForwardingActivity a: to_destroy ){
+			
+			a.destroy();
+		}
 	}
 	
 	void 
@@ -208,13 +247,11 @@ I2PHelperSocketForwarder
 		synchronized( this ){
 			
 			destroyed = true;
-			
-			read_selector.destroy();
-			
-			write_selector.destroy();
-			
+						
 			read_selector 	= null;
 			write_selector	= null;
+			
+				// this will destroy the selectors
 			
 			activation_count++;
 						
@@ -254,6 +291,8 @@ I2PHelperSocketForwarder
 		
 		private Object		lock = new Object();
 		
+		private long		last_activity	= SystemTime.getMonotonousTime();
+		
 		private boolean		failed;
 		private boolean		destroyed;
 		
@@ -290,6 +329,8 @@ I2PHelperSocketForwarder
 						SocketChannel 			sc,
 						Object 					attachment )
 	        		{
+ 	        			last_activity	= SystemTime.getMonotonousTime();
+ 	        			
 	        			try{
 	        				if ( selector == read_selector ){
 	        					
@@ -339,6 +380,8 @@ I2PHelperSocketForwarder
 					public void 
 					activityOccurred()
 					{
+						last_activity	= SystemTime.getMonotonousTime();
+						
 						readFromI2P();
 					}
 				});
@@ -556,6 +599,8 @@ I2PHelperSocketForwarder
 							try{
 								i2p_output_stream.write( i2p_output_buffer, 0, read );
 								
+								last_activity	= SystemTime.getMonotonousTime();
+								
 								// i2p_output_stream.flush();
 								
 								ok = true;
@@ -581,6 +626,25 @@ I2PHelperSocketForwarder
 			}
 			
 			return( read > 0 );
+		}
+		
+		private boolean
+		timeout()
+		{
+			try{
+				if ( i2p_socket.isClosed() || bigly_socket.isClosed()){
+					
+					return( true );
+				}
+			}catch( Throwable e ){
+			}
+			
+			if ( SystemTime.getMonotonousTime() - last_activity > 2*60*1000 ){
+				
+				return( true );
+			}
+			
+			return( false );
 		}
 		
 		private void

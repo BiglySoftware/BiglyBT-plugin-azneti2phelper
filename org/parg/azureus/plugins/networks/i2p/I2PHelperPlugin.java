@@ -32,6 +32,7 @@ import java.io.File;
 
 
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -51,6 +52,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -3455,7 +3457,31 @@ I2PHelperPlugin
 			}
 		}catch( Throwable e ){
 			
-			Debug.out( e );
+			boolean ignore = false;
+			
+			if ( e instanceof IOException ){
+				
+				String message = Debug.getNestedExceptionMessage( e );
+				
+				if ( message != null ){
+					
+					message = message.toLowerCase( Locale.US );
+				
+					if (	message.contains( "closed" ) ||
+							message.contains( "aborted" ) ||
+							message.contains( "disconnected" ) ||
+							message.contains( "reset" ) ||
+							message.contains( "end of" )){
+			
+						ignore = true;
+					}
+				}
+			}
+			
+			if ( !ignore ){
+			
+				Debug.out( e );
+			}
 			
 			try{
 				i2p_socket.close();
