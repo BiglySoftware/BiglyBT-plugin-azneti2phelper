@@ -61,7 +61,6 @@ import net.i2p.I2PAppContext;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketManager;
 import net.i2p.client.streaming.I2PSocketOptions;
-import net.i2p.client.streaming.impl.MessageInputStream.ActivityListener;
 import net.i2p.data.Base32;
 import net.i2p.data.Base64;
 import net.i2p.data.Destination;
@@ -324,6 +323,7 @@ I2PHelperPlugin
 		System.setProperty( "I2P_DISABLE_HTTP_AGENT_OVERRIDE", "1" );
 		System.setProperty( "I2P_DISABLE_HTTP_KEEPALIVE_OVERRIDE", "1" );
 		System.setProperty( "I2P_DISABLE_TIMEZONE_OVERRIDE", "1" );
+		System.setProperty( "I2P_DISABLE_OUTPUT_OVERRIDE", "1" );
 	}
 	
 	private static final String	BOOTSTRAP_SERVER = "http://i2pboot.vuze.com:60000/?getNodes=true";
@@ -1325,6 +1325,8 @@ I2PHelperPlugin
 							
 							private boolean		floodfill_capable;
 							
+							private boolean 	alert_logged;
+							
 							@Override
 							public void 
 							perform(
@@ -1343,8 +1345,7 @@ I2PHelperPlugin
 								tick_count++;
 								
 								if ( !is_external_router ){
-									
-										// we don't manage rate limits for external routers
+																			// we don't manage rate limits for external routers
 	
 									int mult;
 									
@@ -1393,6 +1394,30 @@ I2PHelperPlugin
 											current_router.setFloodfillCapable( floodfill_capable );
 											
 											current_router.updateProperties();
+										}
+										
+										try{
+												// net.i2p.router.web.helpers.SummaryHelper skew logic
+											
+											long skew = current_router.getRouter().getContext().commSystem().getFramedAveragePeerClockSkew( 33 );
+											
+											log( "Detected router time skew: " + skew );
+
+											skew =  Math.abs( skew );
+											
+											if ( skew > 30*1000 ){
+												
+												if ( log != null && !alert_logged ){
+													
+													alert_logged = true;
+													
+													log.logAlert(
+														LoggerChannel.LT_WARNING,
+														"I2P reported a clock skew of " + skew + "ms. Correct your computer time setting if you want I2P to work correctly." );
+												}
+											}
+										}catch( Throwable e ){
+											
 										}
 									}
 								}
