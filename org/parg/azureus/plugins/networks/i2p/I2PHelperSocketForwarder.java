@@ -45,8 +45,13 @@ import net.i2p.client.streaming.impl.MessageInputStream.ActivityListener;
 public class 
 I2PHelperSocketForwarder
 {
-	private static ThreadPool			async_read_pool 	= new ThreadPool( "I2PSocket forward read", 10, true );
-	private static ThreadPool			async_write_pool 	= new ThreadPool( "I2PSocket forward write", 10, true );
+		// read pool is basically non-blocking so doesn't need to be large
+	
+	private static ThreadPool			async_read_pool 	= new ThreadPool( "I2PSocket forward read", 32, true );
+	
+		// write pool is blocking as there is no non-blocking support for writes to I2P
+	
+	private static ThreadPool			async_write_pool 	= new ThreadPool( "I2PSocket forward write", 256, true );
 
 	private VirtualChannelSelector	read_selector;
 	private VirtualChannelSelector	write_selector;
