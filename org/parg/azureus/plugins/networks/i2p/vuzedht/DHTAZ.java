@@ -354,7 +354,7 @@ DHTAZ
 					
 					DHTTransportValue[][] values =
 						{{
-							new DHTTransportI2P.DHTTransportValueImpl( transport.getLocalContact(), (short)0, value  )
+							transport.createValue( value )
 						}};
 					
 					az_contact.sendStore(

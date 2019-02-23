@@ -42,6 +42,9 @@ I2PHelperAdapter
 	public PluginInterface
 	getPluginInterface();
 	
+	public boolean
+	isDHTEnabled();
+	
 	public String
 	getMessageText(
 		String			key );

@@ -139,7 +139,7 @@ DHTI2P
 		
 		storage_manager = new DHTPluginStorageManager( DHTUtilsI2P.DHT_NETWORK, this, storage_dir );
 
-		transport = new DHTTransportI2P( this, session, my_node, DHTUtilsI2P.REQUEST_TIMEOUT );
+		transport = DHTTransportI2P.createTransport( adapter, this, session, my_node, DHTUtilsI2P.REQUEST_TIMEOUT );
 				
 		Properties	props = new Properties();
 		
@@ -1247,6 +1247,11 @@ DHTI2P
 	public String
 	getStatusString() 
 	{
+		if ( transport.isDisabled()){
+			
+			return( adapter.getMessageText( "azi2phelper.status.dhtdisabled" ));
+		}
+		
 		long size = dht.getControl().getStats().getEstimatedDHTSize();
 		
 		if ( size < 50 ){

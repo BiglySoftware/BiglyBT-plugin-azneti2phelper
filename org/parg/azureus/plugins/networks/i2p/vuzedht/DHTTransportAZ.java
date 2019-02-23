@@ -1322,7 +1322,15 @@ DHTTransportAZ
 		Map<String,Object>		map )
 	{
 			// NID is encoded into the address - <nid>.<dest>
-		return( new DHTTransportContactAZ( this, base_transport.importContactFromMap(map)));
+		
+		DHTTransportContactI2P contact = base_transport.importContactFromMap( map );
+		
+		if ( contact == null ){
+			
+			return( null );
+		}
+		
+		return( new DHTTransportContactAZ( this, contact ));
 	}
 	
 		// direct contact-contact communication
@@ -1443,6 +1451,13 @@ DHTTransportAZ
 			
 			return( res );
 		}
+	}
+	
+	protected DHTTransportValue
+	createValue(
+		byte[] value )
+	{
+		return( base_transport.createValue( getLocalContact(), (short)0, value  ));
 	}
 	
 	@Override

@@ -117,7 +117,8 @@ DHTAZClient
 						NodeInfo my_node= new NodeInfo( dht_nid, my_dest, dht_port );
 		
 						DHTTransportI2P base_transport = 
-							new DHTTransportI2P(
+							DHTTransportI2P.createTransport(
+								adapter,
 								new DHTI2PAdapter(){
 									@Override
 									public void 

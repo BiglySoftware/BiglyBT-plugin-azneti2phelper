@@ -53,6 +53,7 @@ I2PHelperRouterDHT
 	private final I2PHelperRouter			router;
 	private final File						config_dir;
 	private final int						dht_index;
+	private final boolean					is_secondary;
 	
 	private final boolean					is_bootstrap_node;
 	private final boolean					is_vuze_dht;
@@ -82,6 +83,7 @@ I2PHelperRouterDHT
 		I2PHelperRouter			_router,
 		File					_config_dir,
 		int						_dht_index,
+		boolean					_is_secondary,
 		boolean					_is_bootstrap_node,
 		boolean					_is_vuze_dht,
 		boolean					_force_new_address,
@@ -90,6 +92,7 @@ I2PHelperRouterDHT
 		router				= _router;
 		config_dir			= _config_dir;
 		dht_index			= _dht_index;
+		is_secondary		= _is_secondary;
 		is_bootstrap_node	= _is_bootstrap_node;
 		is_vuze_dht			= _is_vuze_dht;
 		force_new_address	= _force_new_address;
@@ -111,7 +114,7 @@ I2PHelperRouterDHT
 			name = String.valueOf( dht_index );
 		}
 		
-		return( "[" + name + "/" + (is_vuze_dht?"AZ":"I2P") + "]" );
+		return( "[" + name + "/" + (is_vuze_dht?"AZ":"I2P") + "]" + (is_secondary?"+":"" ));
 	}
 	
 	public void
@@ -131,6 +134,12 @@ I2PHelperRouterDHT
 	getDHTIndex()
 	{
 		return( dht_index );
+	}
+	
+	public boolean
+	isSecondary()
+	{
+		return( is_secondary );
 	}
 	
 	public boolean
@@ -165,7 +174,7 @@ I2PHelperRouterDHT
 		
 		sm_properties.putAll( _sm_properties );
 		
-		router.setupSMExplicitOpts( sm_properties, Constants.APP_NAME + ": DHT " + name, dht_index==0?I2PHelperRouter.SM_TYPE_MIX:I2PHelperRouter.SM_TYPE_PURE );
+		router.setupSMExplicitOpts( sm_properties, Constants.APP_NAME + ": DHT " + name + (is_secondary?"+":""), dht_index==0?I2PHelperRouter.SM_TYPE_MIX:I2PHelperRouter.SM_TYPE_PURE );
 
 		try{
 			synchronized( init_lock ){
@@ -185,12 +194,17 @@ I2PHelperRouterDHT
 				try{
 					long start = SystemTime.getMonotonousTime();
 					
-					adapter.log( "Initializing DHT " + dht_index + " ..." );
+					adapter.log( "Initializing DHT " + dht_index + (is_secondary?"+":"") + " ..." );
 									
-					String idx=dht_index==0?"":String.valueOf(dht_index);
+					String suffix = dht_index==0?"":String.valueOf(dht_index);
 					
-					File dht_config 	= new File( config_dir,  "dht"+idx+".config" );
-					File dest_key_file 	= new File( config_dir,  "dest_key"+idx+".dat" );
+					if ( is_secondary ){
+						
+						suffix += "_s";
+					}
+					
+					File dht_config 	= new File( config_dir,  "dht"+suffix+".config" );
+					File dest_key_file 	= new File( config_dir,  "dest_key"+suffix+".dat" );
 			        
 			        boolean	use_existing_key = dest_key_file.exists() && !force_new_address;
 			        
@@ -286,45 +300,6 @@ I2PHelperRouterDHT
 					b32_dest	= Base32.encode( my_dest.calculateHash().getData()) + ".b32.i2p";
 					
 					adapter.stateChanged( this, false );
-		
-						// some older trackers require ip to be explicitly set to the full destination name :(
-					
-					/*
-					 * don't do this anymore, the socks proxy adds this in when required
-					 * 
-				    String explicit_ips = COConfigurationManager.getStringParameter( "Override Ip", "" ).trim();
-			
-				    if ( !explicit_ips.contains( full_dest )){
-				    	
-				    	if ( explicit_ips.length() == 0 ){
-				    		
-				    		explicit_ips = full_dest;
-				    		
-				    	}else{
-				    
-				    		String[]	bits = explicit_ips.split( ";" );
-				    		
-				    		explicit_ips = "";
-				    		
-				    		for ( String bit: bits ){
-				    			
-				    			bit = bit.trim();
-				    			
-				    			if ( bit.length() > 0 ){
-				    				
-				    				if ( !bit.endsWith( ".i2p" )){
-				    						    			
-				    					explicit_ips += ( explicit_ips.length()==0?"":"; ") + bit;
-				    				}
-				    			}
-				    		}
-				    		
-				    		explicit_ips += ( explicit_ips.length()==0?"":"; ") + full_dest;
-				    	}
-				    	
-				    	COConfigurationManager.setParameter( "Override Ip", explicit_ips );
-				    }
-				    */
 					
 					dht_socket_manager	= sm;
 							
@@ -380,78 +355,55 @@ I2PHelperRouterDHT
 						}
 					}.start();
 					
-					Properties dht_props;
-					
-					if ( !use_existing_key ){
+					if ( is_secondary ){
 						
-						new PrivateKeyFile( dest_key_file , dht_session ).write();
-						
-						dht_props = new Properties();
-						
-					}else{
-					
-						dht_props = I2PHelperUtils.readProperties( dht_config );
-					}
-					
-					String dht_port_str = dht_props.getProperty( "port" );
-					String dht_NID_str 	= dht_props.getProperty( "nid" );
-						
-					boolean	use_existing_nid = dht_port_str != null && dht_NID_str != null;
-						
-					
-					String 	boot_dest 	= "N0e4jfsxy~NYzyr-0bY1nwpnhTza8fn1wWr6IHHOmaIEnbEvgltJvyJn8LWvwlu589mUPhQXQb9BtMrkEan8RZSL4Vo2iFgMCxjTOnfA2dW1~JpL0ddGM28OQITya-1YDgNZFmyX0Me-~RjJjTg31YNozDoosIQ-Uvz2s5aUrzI0gt0r3M4PFUThb0eefd51Yb-eEQMpBb-Hd~EU07yw46ljy2uP4tiEPlWt0l0YR8nbeH0Eg6i3fCoSVgWpSeRjJ9vJeHvwGymO2rPHCSCPgIVwwyqNYpgkqGWnn9Qg97Wc-zrTBiRJp0Dn4lcYvkbbeBrblZDOy6PnPFp33-WZ7lcaVeR6uNGqphQxCYv8pbti5Q9QYcc6IzYpvzsgDCbIVhuzQ9Px2-l6qVg6S-i-cYwQfxBYnVSyVmryuGSkIha2AezYJk2~0k7-byeJ0q57Re~aZy6boIDa2qtaOyi-RDbCWAoIIfOycwkAvqf5nG8KOVwGzvFEjYuExyP3f9ZlAAAA";
-					int		boot_port 	= 52896;
-					String	boot_nid	= "6d3dh2bwrafjdx4ba46zb6jvbnnt2g3r";
-						
-					NodeInfo boot_ninf = new NodeInfo( new NID( Base32.decode( boot_nid )), new Destination( boot_dest ), boot_port );
-			
-					if ( destroyed ){
-						
-						throw( new Exception( "Router destroyed" ));
-					}
-					
-					I2PAppContext ctx = I2PAppContext.getGlobalContext();
-			
-					if ( !is_vuze_dht ){
-						
-						throw( new Exception( "Not supported" ));
-						/*
-						DHTNodes.setBootstrap( is_bootstrap_node ); 
-			
-						KRPC	snark_dht;
-						
-						if ( use_existing_nid ){
+						if ( !use_existing_key ){
 							
-							int	dht_port = Integer.parseInt( dht_port_str );
-							NID	dht_nid	= new NID( Base32.decode( dht_NID_str ));
-					
-							dht = snark_dht = new KRPC( ctx, "i2pvuze", dht_session, dht_port, dht_nid, adapter );
-							
-						}else{	
-							
-				    		dht = snark_dht = new KRPC( ctx, "i2pvuze", dht_session, adapter );
-				    	}
-									
-						if ( !use_existing_nid ){
-							
-							dht_props.setProperty( "dest", my_dest.toBase64());
-							dht_props.setProperty( "port", String.valueOf( snark_dht.getPort()));
-							dht_props.setProperty( "nid", Base32.encode( snark_dht.getNID().getData()));
-							
-							I2PHelperUtils.writeProperties( dht_config, dht_props );
+							new PrivateKeyFile( dest_key_file , dht_session ).write();
 						}
 						
-						if ( !is_bootstrap_node ){
-												
-							snark_dht.setBootstrapNode( boot_ninf );
+						if ( destroyed ){
+							
+							throw( new Exception( "Router destroyed" ));
 						}
-						
-						adapter.log( "MyDest: " + full_dest);
+
+						adapter.log( "MyDest+: " + full_dest );
 						adapter.log( "        " + b32_dest  + ", existing=" + use_existing_key );
-						adapter.log( "MyNID:  " + Base32.encode( snark_dht.getNID().getData()) + ", existing=" + use_existing_nid );
-						*/
-						
+
 					}else{
+						
+						Properties dht_props;
+						
+						if ( !use_existing_key ){
+							
+							new PrivateKeyFile( dest_key_file , dht_session ).write();
+							
+							dht_props = new Properties();
+							
+						}else{
+						
+							dht_props = I2PHelperUtils.readProperties( dht_config );
+						}
+						
+						String dht_port_str = dht_props.getProperty( "port" );
+						String dht_NID_str 	= dht_props.getProperty( "nid" );
+							
+						boolean	use_existing_nid = dht_port_str != null && dht_NID_str != null;
+							
+						
+						String 	boot_dest 	= "N0e4jfsxy~NYzyr-0bY1nwpnhTza8fn1wWr6IHHOmaIEnbEvgltJvyJn8LWvwlu589mUPhQXQb9BtMrkEan8RZSL4Vo2iFgMCxjTOnfA2dW1~JpL0ddGM28OQITya-1YDgNZFmyX0Me-~RjJjTg31YNozDoosIQ-Uvz2s5aUrzI0gt0r3M4PFUThb0eefd51Yb-eEQMpBb-Hd~EU07yw46ljy2uP4tiEPlWt0l0YR8nbeH0Eg6i3fCoSVgWpSeRjJ9vJeHvwGymO2rPHCSCPgIVwwyqNYpgkqGWnn9Qg97Wc-zrTBiRJp0Dn4lcYvkbbeBrblZDOy6PnPFp33-WZ7lcaVeR6uNGqphQxCYv8pbti5Q9QYcc6IzYpvzsgDCbIVhuzQ9Px2-l6qVg6S-i-cYwQfxBYnVSyVmryuGSkIha2AezYJk2~0k7-byeJ0q57Re~aZy6boIDa2qtaOyi-RDbCWAoIIfOycwkAvqf5nG8KOVwGzvFEjYuExyP3f9ZlAAAA";
+						int		boot_port 	= 52896;
+						String	boot_nid	= "6d3dh2bwrafjdx4ba46zb6jvbnnt2g3r";
+							
+						NodeInfo boot_ninf = new NodeInfo( new NID( Base32.decode( boot_nid )), new Destination( boot_dest ), boot_port );
+				
+						if ( destroyed ){
+							
+							throw( new Exception( "Router destroyed" ));
+						}
+						
+						I2PAppContext ctx = I2PAppContext.getGlobalContext();
+			
 						
 						int		dht_port;
 						NID		dht_nid;
@@ -535,6 +487,17 @@ I2PHelperRouterDHT
 		 * May return null
 		 * @return
 		 */
+	
+	public I2PSocketManager
+	getSocksSocketManager()
+	{
+		return( dht_socket_manager );
+	}
+	
+		/**
+		 * May return null
+		 * @return
+		 */
 	public I2PHelperDHT
 	getDHT()
 	{
@@ -608,7 +571,7 @@ I2PHelperRouterDHT
 			
 			dht_socket_manager_properties.putAll( props );
 			
-			adapter.log( "Updating options for " + dht_index + ": " + props );
+			adapter.log( "Updating options for " + dht_index + (is_secondary?"+":"") + ": " + props );
 			
 			return( true );
 		}

@@ -337,7 +337,8 @@ I2PHelperPlugin
 	private LocaleUtilities			loc_utils;
 
 	private int						dht_count	= 2;
-	private String[]				dht_addresses = new String[ dht_count ];
+	private String[]				dht_addresses 	= new String[ dht_count ];
+	private String[]				dht_addresses2 	= new String[ dht_count ];
 	
 	private InfoParameter			i2p_address_param;
 	private IntParameter 			int_port_param;
@@ -352,6 +353,9 @@ I2PHelperPlugin
 	private I2PHelperView			ui_view;
 	
 	private boolean					plugin_enabled;
+	
+	private boolean					dht_enabled;
+	private boolean					dht_secondaries_enabled;
 	
 	private volatile I2PHelperRouter		router;
 	private volatile I2PHelperTracker		tracker;
@@ -841,7 +845,7 @@ I2PHelperPlugin
 					});
 			
 			
-				// UI
+			// UI
 			
 			final BooleanParameter icon_enable		= config_model.addBooleanParameter2( "azi2phelper.ui.icon.enable", "azi2phelper.ui.icon.enable", true );
 
@@ -849,6 +853,19 @@ I2PHelperPlugin
 					"azi2phelper.ui.group",
 					new Parameter[]{ 
 							icon_enable	
+					});
+			// DHT
+			
+			final BooleanParameter dht_enable_param		= config_model.addBooleanParameter2( "azi2phelper.dht.enable", "azi2phelper.dht.enable", true );
+			
+			final BooleanParameter dht_sec_enable_param		= config_model.addBooleanParameter2( "azi2phelper.dht.sec.enable", "azi2phelper.dht.sec.enable", true );
+
+			dht_enable_param.addEnabledOnSelection( dht_sec_enable_param );
+			
+			config_model.createGroup( 
+					"azi2phelper.dht.group",
+					new Parameter[]{ 
+							dht_enable_param, dht_sec_enable_param	
 					});
 			
 				// I2P Internals
@@ -1189,6 +1206,10 @@ I2PHelperPlugin
 						{
 							plugin_enabled 			= enable_param.getValue();
 
+							dht_enabled				= dht_enable_param.getValue();
+							
+							dht_secondaries_enabled	= dht_enabled && dht_sec_enable_param.getValue();
+							
 							boolean use_ext_i2p  	= ext_i2p_param.getValue();
 							
 							boolean	enabled_not_ext = plugin_enabled && !use_ext_i2p;
@@ -1238,6 +1259,9 @@ I2PHelperPlugin
 					};
 			
 			enable_param.addListener( enabler_listener );
+			dht_enable_param.addListener( enabler_listener );
+			dht_sec_enable_param.addListener( enabler_listener );
+			
 			ext_i2p_param.addListener( enabler_listener );
 			link_rates_param.addListener( enabler_listener );
 			
@@ -1734,6 +1758,13 @@ I2PHelperPlugin
 		return( plugin_enabled );
 	}
 	
+	@Override
+	public boolean 
+	isDHTEnabled()
+	{
+		return( dht_enabled );
+	}
+	
 	public String
 	getStatusText()
 	{
@@ -1779,72 +1810,92 @@ I2PHelperPlugin
 		I2PHelperRouterDHT	dht,
 		boolean				init_done )
 	{
-		if ( init_done ){
-			
-			if ( dht.getDHTIndex() == I2PHelperRouter.DHT_MIX ){
-						
-				new AEThread2( "I2P:async" )
-				{
-					@Override
-					public void
-					run()
-					{
-						String[] nets = new String[]{ AENetworkClassifier.AT_PUBLIC, AENetworkClassifier.AT_I2P };
-						
-						Map<String,Object> server_options = new HashMap<String, Object>();
-						
-						server_options.put( "networks", nets );
-						
-						try{
-							DHTPluginInterface expected_dht_pi = getProxyDHT( "DHT bridge setup", server_options );
-							
-							if ( expected_dht_pi != null ){
-								
-								List<DistributedDatabase> ddbs = getPluginInterface().getUtilities().getDistributedDatabases( nets );
+		if ( !dht.isSecondary()){
+		
+			if ( init_done ){
 				
-								for ( DistributedDatabase ddb: ddbs ){
+				if ( dht.getDHTIndex() == I2PHelperRouter.DHT_MIX ){
+							
+					new AEThread2( "I2P:async" )
+					{
+						@Override
+						public void
+						run()
+						{
+							String[] nets = new String[]{ AENetworkClassifier.AT_PUBLIC, AENetworkClassifier.AT_I2P };
+							
+							Map<String,Object> server_options = new HashMap<String, Object>();
+							
+							server_options.put( "networks", nets );
+							
+							try{
+								DHTPluginInterface expected_dht_pi = getProxyDHT( "DHT bridge setup", server_options );
+								
+								if ( expected_dht_pi != null ){
 									
-									if ( ddb.getNetwork() == AENetworkClassifier.AT_I2P ){
-											
-										DHTPluginInterface dht_pi = ddb.getDHTPlugin();
+									List<DistributedDatabase> ddbs = getPluginInterface().getUtilities().getDistributedDatabases( nets );
+					
+									for ( DistributedDatabase ddb: ddbs ){
 										
-										if ( dht_pi == expected_dht_pi ){
-										
-											while( dht_pi.isInitialising()){
+										if ( ddb.getNetwork() == AENetworkClassifier.AT_I2P ){
 												
-												Thread.sleep( 5000 );
-											}
+											DHTPluginInterface dht_pi = ddb.getDHTPlugin();
 											
-											dht_bridge.setDDB( ddb );
+											if ( dht_pi == expected_dht_pi ){
+											
+												while( dht_pi.isInitialising()){
+													
+													Thread.sleep( 5000 );
+												}
+												
+												dht_bridge.setDDB( ddb );
+											}
 										}
 									}
 								}
+							}catch( Throwable e ){
+								
+								Debug.out( e );
 							}
-						}catch( Throwable e ){
-							
-							Debug.out( e );
 						}
-					}
-				}.start();
-			}
-		}else{
-			
-			String address = dht.getB32Address();
-			
-			if ( address.length() > 0 ){
-				
-				int	 index = dht.getDHTIndex();
-				
-				dht_addresses[ index ] = address;
-				
-				String str = "";
-				
-				for ( int i=0;i<dht_addresses.length;i++){
-					
-					str += ( str.length()==0?"":", " ) + (dht_addresses[i]==null?"<pending>":dht_addresses[i]);
+					}.start();
 				}
-				i2p_address_param.setValue( str );
 			}
+		}
+					
+		String address = dht.getB32Address();
+			
+		if ( address != null && address.length() > 0 ){
+				
+			int	 index = dht.getDHTIndex();
+			
+			if ( dht.isSecondary()){
+				
+				dht_addresses2[ index ] = address;
+				
+			}else{
+			
+				dht_addresses[ index ] = address;
+			}
+			
+			String str = "";
+			
+			for ( int i=0;i<dht_addresses.length;i++){
+				
+				str += ( str.length()==0?"":"\r\n" ) + (dht_addresses[i]==null?"<pending>":dht_addresses[i]);
+			}
+						
+			for ( int i=0;i<dht_addresses2.length;i++){
+				
+				String addr = dht_addresses2[i];
+				
+				if ( addr != null && addr.length() > 0 ){
+					
+					str += ( str.length()==0?"":"\r\n" ) + addr + "+";
+				}
+			}
+			
+			i2p_address_param.setValue( str );
 		}
 	}
 	
@@ -1901,6 +1952,12 @@ I2PHelperPlugin
 	getDHTCount()
 	{
 		return( dht_count );
+	}
+	
+	public boolean
+	getDHTSecondariesEnabled()
+	{
+		return( dht_secondaries_enabled );
 	}
 	
 	int		max_mix_peers	= 0;
@@ -5498,6 +5555,13 @@ I2PHelperPlugin
 				getPluginInterface()
 				{
 					return( null );
+				}
+				
+				@Override
+				public boolean 
+				isDHTEnabled()
+				{
+					return true;
 				}
 				
 				@Override

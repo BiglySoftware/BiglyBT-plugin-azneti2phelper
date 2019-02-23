@@ -255,7 +255,14 @@ I2PHelperAZDHT
 		Map<String,Object>				map )
 	{
 		try{
-			return( new DHTContactImpl(((DHTTransportAZ)getDHT().getTransport()).importContact(map)));
+			DHTTransportContactAZ contact = ((DHTTransportAZ)getDHT().getTransport()).importContact(map);
+			
+			if ( contact == null ){
+				
+				return( null );
+			}
+			
+			return( new DHTContactImpl( contact ));
 			
 		}catch( Throwable e ){
 			

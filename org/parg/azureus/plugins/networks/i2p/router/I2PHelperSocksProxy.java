@@ -56,7 +56,6 @@ import net.i2p.data.Destination;
 
 import com.biglybt.core.tracker.protocol.PRHelpers;
 import com.biglybt.core.util.AERunnable;
-import com.biglybt.core.util.AESemaphore;
 import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.BEncoder;
 import com.biglybt.core.util.Constants;
@@ -91,7 +90,7 @@ I2PHelperSocksProxy
 	
 	private Set<SOCKSProxyConnection>		connections = new HashSet<SOCKSProxyConnection>();
 	
-	private ThreadPool	connect_pool = new ThreadPool( "I2PHelperSocksProxyConnect", 10 );
+	private ThreadPool	connect_pool = new ThreadPool( "I2PHelperSocksProxyConnect", 32 );
 
 	{
 		try{
@@ -136,6 +135,15 @@ I2PHelperSocksProxy
 		proxy = AESocksProxyFactory.create( _port, 120*1000, 120*1000, this );
 		
 		adapter.log( "Intermediate SOCKS proxy started on port " + proxy.getPort());
+		
+		/*
+		SimpleTimer.addPeriodicEvent(
+			"socks timer",
+			5000,
+			(e)->{
+				tick();
+			});
+		*/
 	}
 	
 	public int
@@ -224,6 +232,22 @@ I2PHelperSocksProxy
 		}
 	}
 	
+	/*
+	private void
+	tick()
+	{
+		synchronized( this ){
+	
+			for ( SOCKSProxyConnection con: connections ){
+				
+				System.out.println( con.getName());
+				
+				con.tick();
+			}
+		}
+	}
+	*/
+	
 	private I2PSocketManager
 	getSocketManager(
 		Map<String,Object>		options )
@@ -239,7 +263,7 @@ I2PHelperSocksProxy
 				throw( new Exception( "SOCKS proxy destroyed" ));
 			}
 			
-			I2PSocketManager sm = router.selectDHT( options ).getDHTSocketManager();
+			I2PSocketManager sm = router.getSocketManagerForSocks( options );
 			
 			if ( sm != null ){
 				
@@ -443,9 +467,11 @@ I2PHelperSocksProxy
 		}
 	}
 	
-	protected static ThreadPool			async_read_pool 	= new ThreadPool( "I2PSocket async read", 10, true );
-	protected static ThreadPool			async_write_pool 	= new ThreadPool( "I2PSocket async write", 10, true );
-
+	protected static ThreadPool			async_read_pool 	= new ThreadPool( "I2PSocket relay read", 32, true );
+	
+		// write pool is blocking as there is no non-blocking support for writes to I2P
+	
+	protected static ThreadPool			async_write_pool 	= new ThreadPool( "I2PSocket relay write", 256, true );
 	
 	private class
 	SOCKSProxyConnection
@@ -635,6 +661,20 @@ I2PHelperSocksProxy
 			}
 		}
 		
+		/*
+		private void
+		tick()
+		{
+			synchronized( this ){
+				
+				if ( relay_state != null ){
+					
+					relay_state.tick();
+				}
+			}
+		}
+		*/
+		
 		@Override
 		public void
 		relayData()
@@ -729,6 +769,8 @@ I2PHelperSocksProxy
 			
 				throws IOException
 			{		
+				// System.out.println( "Relay start: " + socket.getPeerDestination());
+
 				connection	= _connection;
 				
 				source_channel	= connection.getSourceChannel();
@@ -761,6 +803,19 @@ I2PHelperSocksProxy
 				
 				readFromI2P();
 			}
+			
+			/*
+			private void
+			tick()
+			{
+				try{
+					System.out.println( "    " + getStateName() + " - ready=" + input_stream.available());
+					
+				}catch( Throwable e ){
+					
+				}
+			}
+			*/
 			
 			private void
 			readFromI2P()
@@ -806,7 +861,7 @@ I2PHelperSocksProxy
 											synchronized( lock ){
 												
 												if ( !i2p_read_deferred ){
-											
+																								
 													went_async = true;
 													
 													return;
@@ -913,7 +968,9 @@ I2PHelperSocksProxy
 			
 			protected void
 			close()
-			{						
+			{	
+				// System.out.println( "Relay end: " + socket.getPeerDestination());
+				
 				trace( "I2PCon: " + getStateName() + " close" );
 			}
 			
@@ -1307,7 +1364,7 @@ I2PHelperSocksProxy
 										
 										source_buffer.limit( source_buffer.capacity());
 										
-										// output_stream.flush();
+										output_stream.flush();
 										
 										trace( "I2PCon: " + getStateName() + " : write done -> I2P - " + len + ", elapsed = " + ( System.currentTimeMillis() - start ));
 										

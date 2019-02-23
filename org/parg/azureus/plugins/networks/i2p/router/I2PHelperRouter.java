@@ -160,8 +160,7 @@ I2PHelperRouter
 	private final File						config_dir;
 
 	private final Map<String,Object>		router_properties;
-	
-	
+		
 	private final boolean					is_bootstrap_node;
 	private final boolean					is_vuze_dht;
 	private final boolean					force_new_address;
@@ -180,6 +179,7 @@ I2PHelperRouter
 	private Properties						sm_properties = new Properties();	
 	
 	private final I2PHelperRouterDHT[]			dhts;
+	private final I2PHelperRouterDHT[]			dhts_secondaries;
 	
 	private Map<String,ServerInstance>		servers = new HashMap<String, ServerInstance>();
 	
@@ -206,11 +206,12 @@ I2PHelperRouter
 		force_new_address	= _force_new_address;
 		adapter				= _adapter;
 		
-		dhts = new I2PHelperRouterDHT[_dht_count ];
+		dhts 				= new I2PHelperRouterDHT[_dht_count ];
+		dhts_secondaries 	= new I2PHelperRouterDHT[_dht_count ];
 
 		for ( int i=0;i<dhts.length;i++){
 		
-			I2PHelperRouterDHT dht = new I2PHelperRouterDHT( this, config_dir, i, is_bootstrap_node, is_vuze_dht, force_new_address, adapter );
+			I2PHelperRouterDHT dht = new I2PHelperRouterDHT( this, config_dir, i, false, is_bootstrap_node, is_vuze_dht, force_new_address, adapter );
 			
 			if ( i == DHT_MIX ){
 				
@@ -222,6 +223,22 @@ I2PHelperRouter
 			}
 			
 			dhts[i] = dht;
+			
+			if ( plugin.getDHTSecondariesEnabled()){
+				
+				I2PHelperRouterDHT dht_secondary = new I2PHelperRouterDHT( this, config_dir, i, true, false, is_vuze_dht, force_new_address, adapter );
+				
+				if ( i == DHT_MIX ){
+					
+					dht_secondary.setEnabled( getBooleanParameter( PARAM_MIX_ENABLED ));
+					
+				}else if ( i == DHT_NON_MIX ){
+					
+					dht_secondary.setEnabled( getBooleanParameter( PARAM_PURE_ENABLED ));
+				}
+				
+				dhts_secondaries[i] = dht_secondary;
+			}
 		}
 	}
 	
@@ -861,10 +878,57 @@ I2PHelperRouter
 	{
 			// second DHT is lazy initialised if/when selected
 		
-		if ( dhts[DHT_MIX].isEnabled()){
+		initialiseDHT( DHT_MIX );
+	}
+	
+	private I2PHelperRouterDHT
+	initialiseDHT(
+		int		index )
+	{
+		I2PHelperRouterDHT[] to_do = new I2PHelperRouterDHT[]{ dhts[index], dhts_secondaries[ index ] };
+				
+		for ( I2PHelperRouterDHT dht: to_do ){
 			
-			dhts[DHT_MIX].initialiseDHT( i2p_host, i2p_port, DHT_NAMES[DHT_MIX], sm_properties );
+			if ( dht == null ){
+				
+				continue;
+			}
+			
+			if ( !dht.isDHTInitialised()){
+				
+				if ( dht.isEnabled()){
+					
+					try{
+		
+						dht.initialiseDHT( i2p_host, i2p_port, DHT_NAMES[index], sm_properties );
+												
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+			}
 		}
+		
+		return( dhts[index] );
+	}
+	
+	protected I2PSocketManager
+	getSocketManagerForSocks(
+		Map<String,Object>		options )
+	{
+		I2PHelperRouterDHT dht =  selectDHT( options );
+		
+		int index = dht.getDHTIndex();
+		
+		I2PHelperRouterDHT secondary = dhts_secondaries[ index ];
+		
+		if ( secondary != null ){
+			
+			dht = secondary;
+		}
+		
+		return( dht.getSocksSocketManager());
 	}
 	
 	public I2PHelperRouterDHT
@@ -949,18 +1013,7 @@ I2PHelperRouter
 			}
 		}
 				
-		I2PHelperRouterDHT dht = dhts[DHT_NON_MIX];
-			
-		if ( !dht.isDHTInitialised()){
-				
-			try{
-				dht.initialiseDHT( i2p_host, i2p_port, DHT_NAMES[DHT_NON_MIX], sm_properties );
-					
-			}catch( Throwable e ){
-				
-				Debug.out( e );
-			}
-		}
+		I2PHelperRouterDHT dht = initialiseDHT( DHT_NON_MIX );
 			
 		return( dht );
 	}
@@ -976,18 +1029,7 @@ I2PHelperRouter
 			return( null );
 		}
 		
-		I2PHelperRouterDHT dht = dhts[index];
-		
-		if ( !dht.isDHTInitialised()){
-			
-			try{
-				dht.initialiseDHT( i2p_host, i2p_port, DHT_NAMES[index], sm_properties );
-				
-			}catch( Throwable e ){
-				
-				Debug.out( e );
-			}
-		}
+		I2PHelperRouterDHT dht = initialiseDHT( index );
 		
 		return( dht );
 	}
@@ -1092,6 +1134,14 @@ I2PHelperRouter
 				for ( I2PHelperRouterDHT dht: dhts ){
 				
 					dht.destroy();
+				}
+				
+				for ( I2PHelperRouterDHT dht: dhts_secondaries ){
+					
+					if ( dht != null ){
+						
+						dht.destroy();
+					}
 				}
 			}catch( Throwable e ){
 				

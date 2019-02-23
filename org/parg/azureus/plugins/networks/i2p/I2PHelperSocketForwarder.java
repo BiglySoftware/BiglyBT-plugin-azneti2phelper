@@ -317,13 +317,17 @@ I2PHelperSocketForwarder
 		
 			throws Exception
 		{
+			// System.out.println( "Forwarder start: " + i2p_socket.getPeerDestination());
+			
 			bigly_channel = bigly_socket.getChannel();
 			
 			bigly_channel.configureBlocking( false );
 				
 			i2p_input_stream	= (MessageInputStream)i2p_socket.getInputStream();
 			i2p_output_stream	= i2p_socket.getOutputStream();
-							
+				
+			i2p_input_stream.setReadTimeout( 0 );	// non-blocking
+			
 			bigly_listener =
 	        	new VirtualChannelSelector.VirtualSelectorListener()
 				{
@@ -683,6 +687,9 @@ I2PHelperSocketForwarder
 				
 				destroyed = true;
 			}
+			
+			// System.out.println( "Forwarder end: " + i2p_socket.getPeerDestination());
+
 
 			if ( read_selector_registered ){
 				
