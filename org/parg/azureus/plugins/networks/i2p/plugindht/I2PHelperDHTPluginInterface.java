@@ -276,6 +276,20 @@ I2PHelperDHTPluginInterface
 	}
 	
 	@Override
+	public InetSocketAddress 
+	getConnectionOrientedEndpoint()
+	{
+		InetSocketAddress address = plugin.getSecondaryEndpoint( dht_index );
+		
+		if ( address == null ){
+			
+			address = local_contact.getAddress();
+		}
+		
+		return( address );
+	}
+	
+	@Override
 	public DHTPluginKeyStats
 	decodeStats(
 		DHTPluginValue		value )
@@ -645,7 +659,10 @@ I2PHelperDHTPluginInterface
 		String						description,
 		DHTPluginOperationListener	listener )
 	{
-		Debug.out( "not imp" );
+		// This is used to rapidly make an effort to remove things on closedown. I2P is too
+		// slow to make an effort to do this
+		
+		//Debug.out( "not imp" );
 	}
 	
 	@Override

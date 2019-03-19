@@ -1034,6 +1034,22 @@ I2PHelperRouter
 		return( dht );
 	}
 	
+	public I2PHelperRouterDHT
+	selectSecondaryDHT(
+		int		index )
+	{
+		if ( index >= dhts.length ){
+			
+			Debug.out( "Invalid DHT index" );
+			
+			return( null );
+		}
+		
+		initialiseDHT( index );
+		
+		return( dhts_secondaries[ index] );
+	}
+	
 	public I2PHelperRouterDHT[]
 	getAllDHTs()
 	{

@@ -1960,6 +1960,25 @@ I2PHelperPlugin
 		return( dht_secondaries_enabled );
 	}
 	
+	public InetSocketAddress
+	getSecondaryEndpoint(
+		int		dht_index )
+	{
+		if ( dht_secondaries_enabled ){
+			
+			I2PHelperRouter	r = router;
+
+			I2PHelperRouterDHT dht = r.selectSecondaryDHT( dht_index );
+			
+			if ( dht != null ){
+						
+				return( InetSocketAddress.createUnresolved( dht.getB32Address(), 6881 ));
+			}
+		}
+		
+		return( null );
+	}
+	
 	int		max_mix_peers	= 0;
 	int		max_pure_peers	= 0;
 	long	info_start_time = SystemTime.getMonotonousTime();
@@ -3429,30 +3448,52 @@ I2PHelperPlugin
 				return;
 			}
 			
-			byte[]	peer_hash = dest.calculateHash().getData();
+			byte[]	remote_hash = dest.calculateHash().getData();
 			
-			String peer_ip = Base32.encode( peer_hash ) + ".b32.i2p";
+			String remote_ip = Base32.encode( remote_hash ) + ".b32.i2p";
+			
 			
 			// System.out.println( "Incoming from " + peer_ip + ", port=" + i2p_socket.getLocalPort());
 			
 			if ( handle_maggots && i2p_socket.getLocalPort() == 80 ){
 				
-				handleMaggotRequest( i2p_socket, peer_hash );
+				handleMaggotRequest( i2p_socket, remote_hash );
 				
 			}else{
+			
 				
 				synchronized( dest_map ){
 					
-					dest_map.put( peer_ip, dest );
+					dest_map.put( remote_ip, dest );
 				}
 				
 				bigly_socket.bind( null );
 				
-				final int local_port = bigly_socket.getLocalPort();
+				final int proxy_port = bigly_socket.getLocalPort();
+				
+				String local_ip;
+				
+				if ( dht == null ){
+				
+					byte[]	local_hash = i2p_socket.getThisDestination().calculateHash().getData();
+				
+					local_ip = Base32.encode( local_hash ) + ".b32.i2p";
+					
+				}else{
+					
+					local_ip = dht.getB32Address();
+				}
 				
 					// we need to pass the peer_ip to the core so that it doesn't just see '127.0.0.1'
 				
-				final AEProxyAddressMapper.PortMapping mapping = AEProxyFactory.getAddressMapper().registerPortMapping( local_port, peer_ip );
+				final AEProxyAddressMapper.PortMapping mapping = 
+						AEProxyFactory.getAddressMapper().registerPortMapping( 
+							proxy_port, 
+							i2p_socket.getLocalPort(),
+							local_ip,
+							i2p_socket.getPort(),
+							remote_ip,
+							null );
 				
 				final Integer dht_index = dht==null?null:dht.getDHTIndex();
 				
@@ -3460,7 +3501,7 @@ I2PHelperPlugin
 					
 					synchronized( local_port_map ){
 						
-						local_port_map.put( local_port, dht_index );
+						local_port_map.put( proxy_port, dht_index );
 					}
 				}
 				
@@ -3505,9 +3546,9 @@ I2PHelperPlugin
 									
 									synchronized( local_port_map ){
 										
-										if ( local_port_map.get( local_port ) == dht_index ){
+										if ( local_port_map.get( proxy_port ) == dht_index ){
 										
-											local_port_map.remove( local_port );
+											local_port_map.remove( proxy_port );
 										}
 									}
 								}
@@ -3528,9 +3569,9 @@ I2PHelperPlugin
 							
 							synchronized( local_port_map ){
 								
-								if ( local_port_map.get( local_port ) == dht_index ){
+								if ( local_port_map.get( proxy_port ) == dht_index ){
 								
-									local_port_map.remove( local_port );
+									local_port_map.remove( proxy_port );
 								}
 							}
 						}
