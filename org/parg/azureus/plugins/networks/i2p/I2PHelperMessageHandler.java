@@ -300,7 +300,7 @@ I2PHelperMessageHandler
 									}else if ( o instanceof byte[] ){
 										
 										try{
-											their_key = new String((byte[])o, Constants.DEFAULT_ENCODING );
+											their_key = new String((byte[])o, Constants.DEFAULT_ENCODING_CHARSET );
 											
 										}catch( Throwable e ){
 											
