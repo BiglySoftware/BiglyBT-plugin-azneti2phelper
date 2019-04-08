@@ -195,6 +195,29 @@ I2PHelperPlugin
         		// 0.9.16 has some core changes to hopefully prevent this, so no hack required!
         
         
+        !!!! Gzip/deflater OOM issue
+        ----ResettableGZIPOutputStream
+        
+       	I changed 'release' to call out.end() (as caching is disabled)
+        	
+			public static void release(ReusableGZIPOutputStream out) {
+				out.reset();
+				if (ENABLE_CACHING){
+					_available.offer(out);
+				}else{
+					out.end();	// PARG added
+				}
+			}
+			
+		and added
+			
+			// PARG added
+			void end(){
+			
+				def.end();
+			}
+        
+        
        	NativeBigInteger: Added load attempt from classes's loader (i.e. plugin class loader)
     		URL resource = ClassLoader.getSystemResource(resourceName);	// existing line in loadFromResource
     	    if (resource == null) {
