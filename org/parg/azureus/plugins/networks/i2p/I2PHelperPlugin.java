@@ -66,6 +66,7 @@ import net.i2p.data.Base64;
 import net.i2p.data.Destination;
 import net.i2p.router.Router;
 import net.i2p.util.NativeBigInteger;
+import net.i2p.util.ReusableGZIPOutputStream;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.download.DownloadManager;
@@ -195,27 +196,7 @@ I2PHelperPlugin
         		// 0.9.16 has some core changes to hopefully prevent this, so no hack required!
         
         
-        !!!! Gzip/deflater OOM issue
-        ----ResettableGZIPOutputStream
-        
-       	I changed 'release' to call out.end() (as caching is disabled)
-        	
-			public static void release(ReusableGZIPOutputStream out) {
-				out.reset();
-				if (ENABLE_CACHING){
-					_available.offer(out);
-				}else{
-					out.end();	// PARG added
-				}
-			}
-			
-		and added
-			
-			// PARG added
-			void end(){
-			
-				def.end();
-			}
+ 
         
         
        	NativeBigInteger: Added load attempt from classes's loader (i.e. plugin class loader)
@@ -286,6 +267,8 @@ I2PHelperPlugin
 		
 		MessageInputStream - add stuff at bottom and replace all calls to .notifyAll with method call to notifyActivity
 		
+			Made MessageInputStream public
+		
 		    private ActivityListener	activity_listener;
 
 		    public void
@@ -297,7 +280,7 @@ I2PHelperPlugin
 		    		activity_listener	= l;
 		    	}
 		    }
-		    
+		    		
 		    public void 
 		    notifyActivity() 
 		    {
@@ -330,6 +313,27 @@ I2PHelperPlugin
     		5 locations - _dataLock.notifyAll() -> notifyActivity()
     		+++++++++++
     		
+    	Fix OOM
+    	-------
+    	ReusableGZIPOutputStream
+    	
+    	Changed method:
+    	
+    		public static void release(ReusableGZIPOutputStream out) {
+        	out.reset();
+        	if (ENABLE_CACHING){
+            	_available.offer(out);
+        	}else{
+        		out.end();
+        	}
+    	}
+		
+		Added method:
+		   void end()
+    	{
+    		def.end();
+    	}
+		
 		
 		Router Console app
 		------------------
