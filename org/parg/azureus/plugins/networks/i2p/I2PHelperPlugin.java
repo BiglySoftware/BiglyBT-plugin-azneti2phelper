@@ -66,7 +66,6 @@ import net.i2p.data.Base64;
 import net.i2p.data.Destination;
 import net.i2p.router.Router;
 import net.i2p.util.NativeBigInteger;
-import net.i2p.util.ReusableGZIPOutputStream;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.download.DownloadManager;
@@ -177,26 +176,8 @@ I2PHelperPlugin
 	implements UnloadablePlugin, I2PHelperAdapter
 {	
 	/*
-	 	----Router: (patch integrated in 0.9.19, yay! commented out System.setProperties for timezone, http agent etc in static initialiser
-	 
-	 	----RoutingKeyGenerator: (patch integrated in 0.9.13, yay!) Fixed up SimpleDateFormat as it assumes GMT (TimeZone default used within SimpleDateFormat)
-	     	private final static SimpleDateFormat _fmt = new SimpleDateFormat(FORMAT, Locale.UK);
-    		static{
-    			_fmt.setCalendar( _cal );	 // PARG
-    		}
-    		        	
-        ----CoreVersion: (patch integrated in 0.9.19, yay!)Added a getVersion method to avoid constant getting cached within Vuze when printing it
-            public static String
-		    getVersion()
-		    {
-		    	return( VERSION );
-		    }
-		    
-        ----UDPReceiver - hacked in a sleep(1000) after detection of exception on reading socket to avoid 100% CPU issue
-        		// 0.9.16 has some core changes to hopefully prevent this, so no hack required!
-        
-        
- 
+ 		CHANGES REQUIRED
+ 		----------------
         
         
        	NativeBigInteger: Added load attempt from classes's loader (i.e. plugin class loader)
@@ -319,20 +300,20 @@ I2PHelperPlugin
     	
     	Changed method:
     	
-    		public static void release(ReusableGZIPOutputStream out) {
-        	out.reset();
-        	if (ENABLE_CACHING){
-            	_available.offer(out);
-        	}else{
-        		out.end();
-        	}
-    	}
+	    	public static void release(ReusableGZIPOutputStream out) {
+	        	out.reset();
+	        	if (ENABLE_CACHING){
+	            	_available.offer(out);
+	        	}else{
+	        		out.end();
+	        	}
+	    	}
 		
 		Added method:
-		   void end()
-    	{
-    		def.end();
-    	}
+			void end()
+	    	{
+	    		def.end();
+	    	}
 		
 		
 		Router Console app
@@ -342,6 +323,33 @@ I2PHelperPlugin
 		LoadClientAppsJob - replace system class - 2 places
                 cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
                 _cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
+                
+                
+            
+        NO LONGER NEEDED
+        ----------------
+                
+                
+	 	----Router: (patch integrated in 0.9.19, yay! commented out System.setProperties for timezone, http agent etc in static initialiser
+	 
+	 	----RoutingKeyGenerator: (patch integrated in 0.9.13, yay!) Fixed up SimpleDateFormat as it assumes GMT (TimeZone default used within SimpleDateFormat)
+	     	private final static SimpleDateFormat _fmt = new SimpleDateFormat(FORMAT, Locale.UK);
+    		static{
+    			_fmt.setCalendar( _cal );	 // PARG
+    		}
+    		        	
+        ----CoreVersion: (patch integrated in 0.9.19, yay!)Added a getVersion method to avoid constant getting cached within Vuze when printing it
+            public static String
+		    getVersion()
+		    {
+		    	return( VERSION );
+		    }
+		    
+        ----UDPReceiver - hacked in a sleep(1000) after detection of exception on reading socket to avoid 100% CPU issue
+        		// 0.9.16 has some core changes to hopefully prevent this, so no hack required!
+        
+        
+
 
 	*/
 	

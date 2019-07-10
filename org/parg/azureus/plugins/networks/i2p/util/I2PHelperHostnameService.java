@@ -81,34 +81,37 @@ I2PHelperHostnameService
 						
 						options.put( ChatInstance.OPT_INVISIBLE, true );
 														
-						final ChatInstance chat = 
+						ChatInstance chat = 
 								BuddyPluginUtils.getChat(
 									AENetworkClassifier.AT_PUBLIC, 
 									"BiglyBT: I2P: DNS Feed[pk=AS3W2WHFGFQMD2KU7Z2YD2IMYIZJ5RG34AW4URPKPQ7NJRCZKJU2PDR4IGGECFLJMOQMARA72SDJ42Y&ro=1]",
 									options );
 
-						chat.setSharedNickname( false );
-						
-						chat.setSaveMessages( true );
-						
-						chat.addListener(
-							new ChatAdapter()
-							{
-								@Override
-								public void 
-								messageReceived(
-									ChatMessage 	msg,
-									boolean			sort_outstanding )
-								{
-									receiveDNSFeedMessage( msg );
-								}
-							});
-						
-						List<ChatMessage>	messages = chat.getMessages();
-						
-						for ( ChatMessage msg: messages ){
+						if ( chat != null ){
 							
-							receiveDNSFeedMessage( msg );
+							chat.setSharedNickname( false );
+							
+							chat.setSaveMessages( true );
+							
+							chat.addListener(
+								new ChatAdapter()
+								{
+									@Override
+									public void 
+									messageReceived(
+										ChatMessage 	msg,
+										boolean			sort_outstanding )
+									{
+										receiveDNSFeedMessage( msg );
+									}
+								});
+							
+							List<ChatMessage>	messages = chat.getMessages();
+							
+							for ( ChatMessage msg: messages ){
+								
+								receiveDNSFeedMessage( msg );
+							}
 						}
 					}catch( Throwable e ){
 						

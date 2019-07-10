@@ -54,7 +54,7 @@ I2PHelperBootstrapServer
 	private static final byte[]	HTTP_REPLY_START = (
 			"HTTP/1.1 200 OK" + NL + 
 			"Content-Type: application/octet-stream" + NL +
-			"Server: " + Constants.AZUREUS_NAME + " " + Constants.AZUREUS_VERSION + NL +
+			"Server: " + Constants.APP_NAME + " " + Constants.getCurrentVersion() + NL +
 			"Connection: close" + NL +
 			"Content-Length: ").getBytes();
 	

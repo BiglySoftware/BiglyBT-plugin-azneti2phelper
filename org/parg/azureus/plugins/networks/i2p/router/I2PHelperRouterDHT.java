@@ -415,7 +415,7 @@ I2PHelperRouterDHT
 			
 						}else{
 							
-							dht_port = 10000 + RandomUtils.nextInt( 65535 - 10000 );
+							dht_port = 10000 + RandomUtils.nextInt( 65533 - 10000 );	// NodeInfo treats >= 65535 as invalid and reply_port = (query_)port+1
 							dht_nid = NodeInfo.generateNID(my_dest.calculateHash(), dht_port, ctx.random());
 							
 							dht_props.setProperty( "dest", my_dest.toBase64());
