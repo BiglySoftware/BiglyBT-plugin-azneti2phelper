@@ -137,6 +137,8 @@ I2PDHTTrackerPlugin
 	private static final int	DL_DERIVED_MAX_TRACK		= 20;
 	private static final int	DIRECT_INJECT_PEER_MAX		= 5;
 		
+	private static final Object OUR_SCRAPE_RESULT_KEY = new Object();
+	
 	private static URL	DEFAULT_URL;
 	
 	static{
@@ -366,8 +368,8 @@ I2PDHTTrackerPlugin
 					
 					try{
 						this_mon.enter();
-			
-						interesting_downloads.put( download, new Long( delay ));
+						
+						setInteresting( download, new Long( delay ));
 						
 					}finally{
 						
@@ -737,7 +739,7 @@ I2PDHTTrackerPlugin
 						
 							// add back to interesting downloads for monitoring
 						
-						interesting_downloads.put( 
+						setInteresting( 
 								download,
 								new Long( 	plugin_interface.getUtilities().getCurrentSystemTime() + 
 											INTERESTING_INIT_MIN_OTHERS ));
@@ -1728,73 +1730,10 @@ I2PDHTTrackerPlugin
 										this_mon.exit();
 									}
 									
-									download.setScrapeResult(
-										new DownloadScrapeResult()
-										{
-											@Override
-											public Download
-											getDownload()
-											{
-												return( download );
-											}
-											
-											@Override
-											public int
-											getResponseType()
-											{
-												return( RT_SUCCESS );
-											}
-											
-											@Override
-											public int
-											getSeedCount()
-											{
-												return( f_adj_seeds );
-											}
-											
-											@Override
-											public int
-											getNonSeedCount()
-											{
-												return( f_adj_leechers );
-											}
-		
-											@Override
-											public long
-											getScrapeStartTime()
-											{
-												return( start );
-											}
-												
-											@Override
-											public void
-											setNextScrapeStartTime(
-												long nextScrapeStartTime)
-											{
-												
-											}
-											@Override
-											public long
-											getNextScrapeStartTime()
-											{
-												return( SystemTime.getCurrentTime() + retry );
-											}
-											
-											@Override
-											public String
-											getStatus()
-											{
-												return( "OK" );
-											}
-		
-											@Override
-											public URL
-											getURL()
-											{
-												return( url_to_report );
-											}
-										});
-									}	
+									DownloadScrapeResult sr = createOurScrapeResult( download, torrent, f_adj_seeds, f_adj_leechers, start, SystemTime.getCurrentTime() + retry );
+									
+									download.setScrapeResult( sr );
+								}	
 							}
 						});
 				
@@ -2186,10 +2125,38 @@ I2PDHTTrackerPlugin
 		}
 	}
 	
+	/**
+	 * this_mon held on entry
+	 * @param dl
+	 * @param scrape_time
+	 */
+	private void
+	setInteresting(
+		Download		dl,
+		long			scrape_time )
+	{
+		interesting_downloads.put( dl, scrape_time );
+		
+		DownloadScrapeResult sr;
+		
+		synchronized( OUR_SCRAPE_RESULT_KEY ){
+			
+			sr = (DownloadScrapeResult)dl.getUserData( OUR_SCRAPE_RESULT_KEY );
+			
+			if ( sr == null ){
+				
+				sr = createOurScrapeResult(dl, dl.getTorrent(), -1, -1, -1, scrape_time );
+			}
+		}
+		
+		dl.setScrapeResult( sr );
+	}
+	
 	protected void
 	processNonRegistrations()
 	{
 		Download	ready_download 				= null;
+		boolean		ready_download_scrape_only	= false;
 		long		ready_download_next_check	= -1;
 		
 		long	now = plugin_interface.getUtilities().getCurrentSystemTime();
@@ -2276,7 +2243,7 @@ I2PDHTTrackerPlugin
 												
 						if ( interesting_pub_max > 0 && interesting_published > interesting_pub_max ){
 							
-							continue;
+							ready_download_scrape_only = true;
 						}
 						
 						DownloadScrapeResult	scrape = (DownloadScrapeResult)scrapes.get( download );
@@ -2303,11 +2270,13 @@ I2PDHTTrackerPlugin
 						ready_download				= download;
 						ready_download_next_check 	= now + check_period;
 						
-						interesting_downloads.put( download, new Long( ready_download_next_check ));
-						
+						setInteresting( download, new Long( ready_download_next_check ));
+												
 					}else if ( target - now > check_period ){
 						
-						interesting_downloads.put( download, new Long( now + (target%check_period)));
+							// update but don't action
+						
+						setInteresting( download, new Long( now + (target%check_period)));
 					}
 				}
 			}
@@ -2319,9 +2288,10 @@ I2PDHTTrackerPlugin
 		
 		if ( ready_download != null ){
 			
-			final Download	f_ready_download = ready_download;
+			Download	f_ready_download 				= ready_download;
+			boolean 	f_ready_download_scrape_only	= ready_download_scrape_only;
 			
-			final Torrent torrent = ready_download.getTorrent();
+			Torrent torrent = ready_download.getTorrent();
 			
 			if ( ready_download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
 
@@ -2392,6 +2362,8 @@ I2PDHTTrackerPlugin
 												
 										if ( diversified ){
 											
+												// reduce DHT load, don't process further
+											
 											try{
 												this_mon.enter();
 		
@@ -2407,6 +2379,7 @@ I2PDHTTrackerPlugin
 												// once we're registered we don't need to process this download any
 												// more unless it goes active and then inactive again
 											
+											/* remove this for the moment, we want to keep scraping it
 											try{
 												this_mon.enter();
 		
@@ -2416,18 +2389,21 @@ I2PDHTTrackerPlugin
 												
 												this_mon.exit();
 											}
+											*/
 											
-											interesting_published++;
-																						
-											dht.put( 
-												torrent.getHash(),
-												"Presence store '" + f_ready_download.getName() + "'",
-												//"0".getBytes(),	// port 0, no connections
-												(byte)0,
-												new I2PHelperDHTAdapter()
-												{
-												});
-										
+											if ( !f_ready_download_scrape_only ){
+												
+												interesting_published++;
+																							
+												dht.put( 
+													torrent.getHash(),
+													"Presence store '" + f_ready_download.getName() + "'",
+													//"0".getBytes(),	// port 0, no connections
+													(byte)0,
+													new I2PHelperDHTAdapter()
+													{
+													});
+											}
 										}
 										
 										
@@ -2462,74 +2438,9 @@ I2PDHTTrackerPlugin
 											this_mon.exit();
 										}
 										
-										f_ready_download.setScrapeResult(
-											new DownloadScrapeResult()
-											{
-												@Override
-												public Download
-												getDownload()
-												{
-													return( null );
-												}
-												
-												@Override
-												public int
-												getResponseType()
-												{
-													return( RT_SUCCESS );
-												}
-												
-												@Override
-												public int
-												getSeedCount()
-												{
-													return( seeds );
-												}
-												
-												@Override
-												public int
-												getNonSeedCount()
-												{
-													return( leechers );
-												}
-		
-												@Override
-												public long
-												getScrapeStartTime()
-												{
-													return( SystemTime.getCurrentTime());
-												}
-													
-												@Override
-												public void
-												setNextScrapeStartTime(
-													long nextScrapeStartTime)
-												{
-												}
-												
-												@Override
-												public long
-												getNextScrapeStartTime()
-												{
-													return( f_next_check );
-												}
-												
-												@Override
-												public String
-												getStatus()
-												{
-													return( "OK" );
-												}
-		
-												@Override
-												public URL
-												getURL()
-												{
-													URL	url_to_report = torrent.isDecentralised()?torrent.getAnnounceURL():DEFAULT_URL;
-	
-													return( url_to_report );
-												}
-											});
+										DownloadScrapeResult sr = createOurScrapeResult( f_ready_download, torrent, seeds, leechers, SystemTime.getCurrentTime(), f_next_check );
+										
+										f_ready_download.setScrapeResult( sr );
 									}
 								});
 				}catch( Throwable e ){
@@ -2537,6 +2448,113 @@ I2PDHTTrackerPlugin
 			}
 		}
 	}
+	
+	private DownloadScrapeResult
+	createOurScrapeResult(
+		Download		dl,
+		Torrent			torrent,
+		int				seeds,
+		int				leechers,
+		long			start,
+		long			next )
+	{
+		DownloadScrapeResult sr = 
+			new DownloadScrapeResult()
+			{
+				@Override
+				public Download
+				getDownload()
+				{
+					return( null );
+				}
+				
+				@Override
+				public int
+				getResponseType()
+				{
+					return( RT_SUCCESS );
+				}
+				
+				@Override
+				public int
+				getSeedCount()
+				{
+					return( seeds );
+				}
+				
+				@Override
+				public int
+				getNonSeedCount()
+				{
+					return( leechers );
+				}
+
+				@Override
+				public long
+				getScrapeStartTime()
+				{
+					return( start );
+				}
+					
+				@Override
+				public void
+				setNextScrapeStartTime(
+					long nextScrapeStartTime)
+				{
+				}
+				
+				@Override
+				public long
+				getNextScrapeStartTime()
+				{
+					try{
+						this_mon.enter();
+						
+						if ( !running_downloads.containsKey( dl )){
+							
+								// pick up actual next scrape value
+							
+							Long real_next = interesting_downloads.get( dl );
+							
+							if ( real_next != null ){
+								
+								return( real_next );
+							}								
+						}
+						
+						return( next );
+						
+					}finally{
+						
+						this_mon.exit();
+					}
+				}
+				
+				@Override
+				public String
+				getStatus()
+				{
+					return( "OK" );
+				}
+
+				@Override
+				public URL
+				getURL()
+				{
+					URL	url = torrent != null && torrent.isDecentralised()?torrent.getAnnounceURL():DEFAULT_URL;
+
+					return( url );
+				}
+			};
+			
+		synchronized( OUR_SCRAPE_RESULT_KEY ){
+				
+			dl.setUserData( OUR_SCRAPE_RESULT_KEY, sr );
+		}
+			
+		return( sr );
+	}
+	
 	
 	@Override
 	public void
