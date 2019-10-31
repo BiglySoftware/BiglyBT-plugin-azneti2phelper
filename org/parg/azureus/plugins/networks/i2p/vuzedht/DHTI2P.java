@@ -45,6 +45,7 @@ import com.biglybt.pif.PluginInterface;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperDHT;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperDHTListener;
+import org.parg.azureus.plugins.networks.i2p.router.I2PSMHolder;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NID;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
 
@@ -116,7 +117,7 @@ DHTI2P
 	DHTI2P(
 		File				_dir,
 		int					_dht_index,
-		I2PSession			session,
+		I2PSMHolder			sm_holder,
 		NodeInfo			_my_node,
 		NodeInfo			boot_node,
 		I2PHelperAdapter	_adapter )
@@ -139,7 +140,7 @@ DHTI2P
 		
 		storage_manager = new DHTPluginStorageManager( DHTUtilsI2P.DHT_NETWORK, this, storage_dir );
 
-		transport = DHTTransportI2P.createTransport( adapter, this, session, my_node, DHTUtilsI2P.REQUEST_TIMEOUT );
+		transport = DHTTransportI2P.createTransport( adapter, this, sm_holder, my_node, DHTUtilsI2P.REQUEST_TIMEOUT );
 				
 		Properties	props = new Properties();
 		

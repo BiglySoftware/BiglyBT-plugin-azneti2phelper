@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.util.Map;
 
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
+import org.parg.azureus.plugins.networks.i2p.router.I2PSMHolder;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
 
 import com.biglybt.core.dht.transport.DHTTransport;
@@ -37,7 +38,6 @@ import com.biglybt.core.dht.transport.DHTTransportFullStats;
 import com.biglybt.core.dht.transport.DHTTransportReplyHandler;
 import com.biglybt.core.dht.transport.DHTTransportValue;
 
-import net.i2p.client.I2PSession;
 import net.i2p.data.Destination;
 
 public interface
@@ -48,17 +48,17 @@ DHTTransportI2P
 	createTransport(
 		I2PHelperAdapter	helper_adapter,
 		DHTI2PAdapter		dht_adapter,
-		I2PSession 			session,
+		I2PSMHolder			sm_holder,
 		NodeInfo			my_node,
 		int					request_timeout )
 	{
 		if ( helper_adapter.isDHTEnabled()){
 		
-			return( new DHTTransportI2PRealImpl( dht_adapter, session, my_node, request_timeout ));
+			return( new DHTTransportI2PRealImpl( dht_adapter, sm_holder, my_node, request_timeout ));
 			
 		}else{
 			
-			return( new DHTTransportI2PFakeImpl( dht_adapter, session, my_node, request_timeout ));
+			return( new DHTTransportI2PFakeImpl( dht_adapter, sm_holder, my_node, request_timeout ));
 		}
 	}
 	

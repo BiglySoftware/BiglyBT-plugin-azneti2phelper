@@ -38,7 +38,6 @@ import net.i2p.client.I2PClient;
 import net.i2p.client.I2PClientFactory;
 import net.i2p.client.I2PSession;
 import net.i2p.client.naming.NamingService;
-import net.i2p.client.streaming.I2PServerSocket;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketManager;
 import net.i2p.client.streaming.I2PSocketManagerFactory;
@@ -913,7 +912,7 @@ I2PHelperRouter
 		return( dhts[index] );
 	}
 	
-	protected I2PSocketManager
+	protected I2PSMHolder
 	getSocketManagerForSocks(
 		Map<String,Object>		options )
 	{
@@ -1106,8 +1105,10 @@ I2PHelperRouter
 			@Override
 			public void
 			run()
-			{
+			{				
 				try{
+					waitForInitialisation();
+
 					server.initialise();
 					
 				}catch( Throwable e ){
@@ -1349,13 +1350,11 @@ I2PHelperRouter
 		private final int				sm_type;
 		private final ServerAdapter		server_adapter;
 		
-		private I2PSession 			session;
-		private I2PSocketManager 	socket_manager;
-		private I2PServerSocket		server_socket;
-
-		private String				b32_dest;
+		private String					b32_dest;
 		
-		private volatile boolean	server_destroyed;
+		private volatile I2PSMHolder	sm_holder;
+
+		private volatile boolean		server_destroyed;
 		
 		private Map<String,Object>		user_properties = new HashMap<String, Object>();
 		
@@ -1437,94 +1436,117 @@ I2PHelperRouter
 					        
 				File dest_key_file 	= new File( config_dir,  server_id + "_dest_key.dat" );
          	
-		        I2PSocketManager	sm = null;
-
-		        long start = SystemTime.getMonotonousTime();
-		        
-		        while( true ){
-			
-		        	InputStream is = new FileInputStream( dest_key_file );
-		        	
-			    	try{
-			    		Properties sm_props = new Properties();
-			    		
-			    		sm_props.putAll( sm_properties );
-			    		
-			    		setupSMExplicitOpts( sm_props, Constants.APP_NAME + ": " + server_id, sm_type );
-			    		
-			    		sm = I2PSocketManagerFactory.createManager( is, i2p_host, i2p_port, sm_props );
-			    	
-			    	}finally{
-			    		
-			    		is.close();
-			    	}
-			    	
-					if ( sm != null ){
+				sm_holder = 
+					new I2PSMHolder()
+					{
+						@Override
+						protected I2PSocketManager 
+						createSocketManager()
 						
-						break;
-					
-					}else{
+							throws Exception
+						{
+							I2PSocketManager	sm = null;
+	
+					        long start = SystemTime.getMonotonousTime();
+					        
+					        while( true ){
 						
-							// I've seen timeouts with 3 mins, crank it up
-						
-						if ( SystemTime.getMonotonousTime() - start > 15*60*1000 ){
-							
-								// seen borked key causing us to get here eventually
-							
-							log( "Forcing new key on next startup" );
-							
-							dest_key_file.delete();
-							
-							throw( new Exception( "Timeout creating socket manager" ));
-						}
-						
-						Thread.sleep( 5000 );
+					        	InputStream is = new FileInputStream( dest_key_file );
+					        	
+						    	try{
+						    		Properties sm_props = new Properties();
+						    		
+						    		sm_props.putAll( sm_properties );
+						    		
+						    		setupSMExplicitOpts( sm_props, Constants.APP_NAME + ": " + server_id, sm_type );
+						    		
+						    		sm = I2PSocketManagerFactory.createManager( is, i2p_host, i2p_port, sm_props );
+						    	
+						    	}finally{
+						    		
+						    		is.close();
+						    	}
+						    	
+								if ( sm != null ){
 									
-						if ( server_destroyed ){
-							
-							throw( new Exception( "Server destroyed" ));
-						}
-					}
-		        }
-		        		
-				log( "Waiting for socket manager startup" );
-				
-		        start = SystemTime.getMonotonousTime();
-
-				while( true ){
-					
-					if ( server_destroyed ){
-						
-						sm.destroySocketManager();
-						
-						throw( new Exception( "Server destroyed" ));
-					}
-					
-					session = sm.getSession();
-					
-					if ( session != null ){
-						
-						break;
-					}
-					
-					if ( SystemTime.getMonotonousTime() - start > 3*60*1000 ){
-						
-						throw( new Exception( "Timeout waiting for socket manager startup" ));
-					}
-
-					
-					Thread.sleep(250);
-				}
+									break;
 								
-				Destination my_dest = session.getMyDestination();
+								}else{
+									
+										// I've seen timeouts with 3 mins, crank it up
+									
+									if ( SystemTime.getMonotonousTime() - start > 15*60*1000 ){
+										
+											// seen borked key causing us to get here eventually
+										
+										log( "Forcing new key on next startup" );
+										
+										dest_key_file.delete();
+										
+										throw( new Exception( "Timeout creating socket manager" ));
+									}
+									
+									Thread.sleep( 5000 );
+												
+									if ( server_destroyed ){
+										
+										throw( new Exception( "Server destroyed" ));
+									}
+								}
+					        }
+					        
+					        return( sm );
+						}
+						
+						protected I2PSession
+						getSession(
+							I2PSocketManager		sm )
+						
+							throws Exception
+						{
+							log( "Waiting for socket manager startup" );
+							
+					        long start = SystemTime.getMonotonousTime();
+			
+							while( true ){
+								
+								if ( server_destroyed ){
+									
+									sm.destroySocketManager();
+									
+									throw( new Exception( "Server destroyed" ));
+								}
+								
+								I2PSession session = sm.getSession();
+								
+								if ( session != null ){
+									
+									return( session );
+								}
+								
+								if ( SystemTime.getMonotonousTime() - start > 3*60*1000 ){
+									
+									throw( new Exception( "Timeout waiting for socket manager startup" ));
+								}
+			
+								
+								Thread.sleep(250);
+							}
+						}
+						
+						@Override
+						protected void 
+						logMessage(
+							String str )
+						{
+							log( str );
+						}};
+										
+				Destination my_dest = sm_holder.getMyDestination();
 				
 				b32_dest	= Base32.encode( my_dest.calculateHash().getData()) + ".b32.i2p";
 				
-				log( "Socket manager startup complete" );
-
-				socket_manager	= sm;
-						
-				server_socket = socket_manager.getServerSocket();
+				log( "Socket manager startup complete" );					
 				
 				new AEThread2( "I2P:accepter" )
 				{
@@ -1535,7 +1557,7 @@ I2PHelperRouter
 						while( !server_destroyed ){
 							
 							try{
-								I2PSocket socket = server_socket.accept();
+								I2PSocket socket = sm_holder.accept();
 								
 								if ( socket == null ){
 									
@@ -1597,10 +1619,10 @@ I2PHelperRouter
 			}			
 		}
 		
-		public I2PSession
-		getSession()
+		public I2PSMHolder
+		getSMHolder()
 		{
-			return( session );
+			return( sm_holder );
 		}
 		
 		public I2PSocket
@@ -1644,7 +1666,7 @@ I2PHelperRouter
 				
 				if ( address.endsWith( ".b32.i2p" )){
 					
-					remote_dest = socket_manager.getSession().lookupDest( address, 30*1000 );
+					remote_dest = sm_holder.lookupDest( address, 30*1000 );
 				}
 			}
 			
@@ -1657,14 +1679,14 @@ I2PHelperRouter
 			
 			overrides.setProperty( "i2p.streaming.connectDelay", "250" );
 
-            I2PSocketOptions socket_opts = socket_manager.buildOptions( overrides );
+            I2PSocketOptions socket_opts = sm_holder.buildOptions( overrides );
                         
             socket_opts.setPort( port );
             
             socket_opts.setConnectTimeout( 120*1000 );
             socket_opts.setReadTimeout( 120*1000 );
      
-			I2PSocket socket = socket_manager.connect( remote_dest, socket_opts );
+			I2PSocket socket = sm_holder.connect( remote_dest, socket_opts );
 			
 			return( socket );
 		}
@@ -1714,29 +1736,9 @@ I2PHelperRouter
 				
 				server_destroyed	= true;
 				
-				try{
-
-					if ( socket_manager != null ){
-						
-						socket_manager.destroySocketManager();
-						
-						socket_manager = null;
-					}
-				}catch( Throwable e ){
+				if ( sm_holder != null ){
 					
-					e.printStackTrace();
-				}
-				
-				try{
-					if ( server_socket != null ){
-						
-						server_socket.close();
-						
-						server_socket = null;
-					}
-				}catch( Throwable e ){
-					
-					e.printStackTrace();
+					sm_holder.destroy();
 				}
 			}
 		}

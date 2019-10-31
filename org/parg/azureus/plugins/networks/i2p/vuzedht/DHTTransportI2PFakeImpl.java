@@ -23,6 +23,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.Map;
 
+import org.parg.azureus.plugins.networks.i2p.router.I2PSMHolder;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
 import org.parg.azureus.plugins.networks.i2p.vuzedht.DHTTransportI2PRealImpl.DHTTransportStatsI2P;
 
@@ -53,7 +54,7 @@ DHTTransportI2PFakeImpl
 	protected
 	DHTTransportI2PFakeImpl(
 		DHTI2PAdapter	_dht_adapter,
-		I2PSession 		_session,
+		I2PSMHolder 	_sm_holder,
 		NodeInfo		_my_node,
 		int				_request_timeout )
 	{	 

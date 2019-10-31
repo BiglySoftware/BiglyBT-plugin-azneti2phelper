@@ -248,7 +248,7 @@ I2PHelperSocksProxy
 	}
 	*/
 	
-	private I2PSocketManager
+	private I2PSMHolder
 	getSocketManager(
 		Map<String,Object>		options )
 	
@@ -263,7 +263,7 @@ I2PHelperSocksProxy
 				throw( new Exception( "SOCKS proxy destroyed" ));
 			}
 			
-			I2PSocketManager sm = router.getSocketManagerForSocks( options );
+			I2PSMHolder sm = router.getSocketManagerForSocks( options );
 			
 			if ( sm != null ){
 				
@@ -321,13 +321,13 @@ I2PHelperSocksProxy
 				}
 			}
 			
-			I2PSocketManager socket_manager = getSocketManager( options );
+			I2PSMHolder sm_holder = getSocketManager( options );
 
 			if ( remote_dest == null ){
 				
 				if ( address.endsWith( ".b32.i2p" )){
 					
-					remote_dest = socket_manager.getSession().lookupDest( address, 30*1000 );
+					remote_dest = sm_holder.lookupDest( address, 30*1000 );
 					
 				}else{
 					
@@ -337,7 +337,7 @@ I2PHelperSocksProxy
 						
 						if ( address_str.length() < 400 ){
 							
-							remote_dest = socket_manager.getSession().lookupDest( address_str, 30*1000 );
+							remote_dest = sm_holder.lookupDest( address_str, 30*1000 );
 							
 						}else{
 							
@@ -360,7 +360,7 @@ I2PHelperSocksProxy
 				throw( new Exception( "Failed to resolve address '" + address + "'" ));
 			}
 			
-			if ( remote_dest.getHash().equals( socket_manager.getSession().getMyDestination().getHash())){
+			if ( remote_dest.getHash().equals( sm_holder.getMyDestination().getHash())){
 				
 				logit = false;
 				
@@ -371,14 +371,14 @@ I2PHelperSocksProxy
 			
 			overrides.setProperty( "i2p.streaming.connectDelay", "250" );
 			
-            I2PSocketOptions socket_opts = socket_manager.buildOptions( overrides );
+            I2PSocketOptions socket_opts = sm_holder.buildOptions( overrides );
             
             socket_opts.setPort( port );
             
             socket_opts.setConnectTimeout( 120*1000 );
             socket_opts.setReadTimeout( 120*1000 );
             
-			I2PSocket socket = socket_manager.connect( remote_dest, socket_opts );
+			I2PSocket socket = sm_holder.connect( remote_dest, socket_opts );
 						
 			adapter.outgoingConnection( socket );
 			
@@ -1174,7 +1174,7 @@ I2PHelperSocksProxy
 																		sb.append( "info_hash=" + arg_map.get( "info_hash" ));
 																		sb.append( "&peer_id=" + arg_map.get( "peer_id" ));
 																		sb.append( "&port=6881" );
-																		sb.append( "&ip=" + getSocketManager( options ).getSession().getMyDestination().toBase64() + ".i2p" );
+																		sb.append( "&ip=" + getSocketManager( options ).getMyDestination().toBase64() + ".i2p" );
 																		sb.append( "&uploaded=" + arg_map.get( "uploaded" ));
 																		sb.append( "&downloaded=" + arg_map.get( "downloaded" ));
 																		sb.append( "&left=" + arg_map.get( "left" ));

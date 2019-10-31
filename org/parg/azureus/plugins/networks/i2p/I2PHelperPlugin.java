@@ -3840,9 +3840,6 @@ I2PHelperPlugin
 													}
 													
 													try{
-								        				Destination dest = I2PAppContext.getGlobalContext().namingService().lookup( host );
-
-								        				I2PSocketManager socket_manager = router.selectDHT().getDHTSocketManager();
 								        				
 								        					// if we ever re-enable this then we'd need to think which DHT we used for maggot
 								        					// lookups...
@@ -3852,6 +3849,12 @@ I2PHelperPlugin
 								        					throw( new Exception( "derp" ));
 								        				}
 								        				
+								        				/*
+								        				 
+								        				Destination dest = I2PAppContext.getGlobalContext().namingService().lookup( host );
+
+								        				I2PSocketManager socket_manager = router.selectDHT().getDHTSocketManager();
+
 								        				I2PSocketOptions opts = socket_manager.buildOptions();
 								        				
 								        				opts.setPort( 80 );
@@ -3950,6 +3953,7 @@ I2PHelperPlugin
 								        					
 								        					socket.close();
 								        				}
+								        				*/
 													}catch( Throwable e ){
 														
 													}

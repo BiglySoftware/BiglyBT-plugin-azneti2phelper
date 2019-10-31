@@ -32,14 +32,12 @@ import java.util.Properties;
 import com.biglybt.core.util.*;
 import net.i2p.I2PAppContext;
 import net.i2p.client.I2PSession;
-import net.i2p.client.streaming.I2PServerSocket;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketManager;
 import net.i2p.client.streaming.I2PSocketManagerFactory;
 import net.i2p.data.Base32;
 import net.i2p.data.Destination;
 import net.i2p.data.Hash;
-import net.i2p.data.PrivateKeyFile;
 
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperDHT;
@@ -60,10 +58,8 @@ I2PHelperRouterDHT
 	private final boolean					force_new_address;
 	private final I2PHelperAdapter			adapter;
 	
-	private volatile I2PSession 			dht_session;
-	private volatile I2PSocketManager 		dht_socket_manager;
+	private volatile I2PSMHolder			sm_holder;
 	private volatile Properties				dht_socket_manager_properties;
-	private volatile I2PServerSocket		dht_server_socket;
 
 	private String				b32_dest = "";
 	
@@ -115,6 +111,13 @@ I2PHelperRouterDHT
 		}
 		
 		return( "[" + name + "/" + (is_vuze_dht?"AZ":"I2P") + "]" + (is_secondary?"+":"" ));
+	}
+	
+	private void
+	log(
+		String		str )
+	{
+		adapter.log( getName() + ": " + str );
 	}
 	
 	public void
@@ -194,7 +197,7 @@ I2PHelperRouterDHT
 				try{
 					long start = SystemTime.getMonotonousTime();
 					
-					adapter.log( "Initializing DHT " + dht_index + (is_secondary?"+":"") + " ..." );
+					log( "Initializing DHT..." );
 									
 					String suffix = dht_index==0?"":String.valueOf(dht_index);
 					
@@ -206,105 +209,128 @@ I2PHelperRouterDHT
 					File dht_config 	= new File( config_dir,  "dht"+suffix+".config" );
 					File dest_key_file 	= new File( config_dir,  "dest_key"+suffix+".dat" );
 			        
-			        boolean	use_existing_key = dest_key_file.exists() && !force_new_address;
+			        boolean[]	use_existing_key = { dest_key_file.exists() && !force_new_address };
 			        
-			        boolean	tried_new_key = false;
-			        
-			        I2PSocketManager	sm = null;
-	
-			        while( true ){
-			        				        
-						if ( use_existing_key ){
-				         	
-				    		InputStream is = new FileInputStream( dest_key_file );
-				    	
-				    		try{
-				    			sm = I2PSocketManagerFactory.createManager( is, i2p_host, i2p_port, sm_properties );
-				    	
-				    		}finally{
-				    		
-				    			is.close();
-				    		}
-				        }else{
-				        	
-				        	sm = I2PSocketManagerFactory.createManager( i2p_host, i2p_port, sm_properties );
-				        }
-						
-						if ( sm != null ){
+			        sm_holder = 
+						new I2PSMHolder()
+						{
+							@Override
+							protected I2PSocketManager 
+							createSocketManager()
 							
-							dht_socket_manager_properties = new Properties();
+								throws Exception
+							{
+						        boolean	tried_new_key = false;
+						        
+						        I2PSocketManager	sm = null;
+				
+						        while( true ){
+						        				        
+									if ( use_existing_key[0] ){
+							         	
+							    		InputStream is = new FileInputStream( dest_key_file );
+							    	
+							    		try{
+							    			sm = I2PSocketManagerFactory.createManager( is, i2p_host, i2p_port, sm_properties );
+							    	
+							    		}finally{
+							    		
+							    			is.close();
+							    		}
+							        }else{
+							        	
+							        	sm = I2PSocketManagerFactory.createManager( i2p_host, i2p_port, sm_properties );
+							        }
+									
+									if ( sm != null ){
+										
+										dht_socket_manager_properties = new Properties();
+										
+										dht_socket_manager_properties.putAll( sm_properties );
+										
+										break;
+									
+									}else{
+										
+											// I've seen timeouts with 3 mins, crank it up
+										
+										if ( SystemTime.getMonotonousTime() - start > 15*60*1000 ){
+											
+												// Seen borked key files causing us to get here as well
+												// delete key file and try once more
+											
+											if ( !tried_new_key ) {
+												
+												log( "Forcing new key" );
+												
+												tried_new_key = true;
+												
+												use_existing_key[0] = false;
+												
+											}else{
+												
+												throw( new Exception( "Timeout creating socket manager" ));
+											}
+										}
+										
+										Thread.sleep( 5000 );
+													
+										if ( destroyed ){
+											
+											throw( new Exception( "Server destroyed" ));
+										}
+									}
+						        }
+						        
+						        return( sm );
+							}
 							
-							dht_socket_manager_properties.putAll( sm_properties );
+							protected I2PSession
+							getSession(
+								I2PSocketManager		sm )
 							
-							break;
-						
-						}else{
-							
-								// I've seen timeouts with 3 mins, crank it up
-							
-							if ( SystemTime.getMonotonousTime() - start > 15*60*1000 ){
+								throws Exception
+							{
+								log( "Waiting for socket manager startup" );
 								
-									// Seen borked key files causing us to get here as well
-									// delete key file and try once more
-								
-								if ( !tried_new_key ) {
+								while( true ){
 									
-									adapter.log( "Forcing new key" );
+									if ( destroyed ){
+										
+										sm.destroySocketManager();
+										
+										throw( new Exception( "DHT destroyed" ));
+									}
 									
-									tried_new_key = true;
+									I2PSession dht_session = sm.getSession();
 									
-									use_existing_key = false;
+									if ( dht_session != null ){
+										
+										return( dht_session );
+									}
 									
-								}else{
-									
-									throw( new Exception( "Timeout creating socket manager" ));
+									Thread.sleep(250);
 								}
 							}
 							
-							Thread.sleep( 5000 );
-										
-							if ( destroyed ){
-								
-								throw( new Exception( "Server destroyed" ));
-							}
-						}
-			        }
+							@Override
+							protected void 
+							logMessage(
+								String str )
+							{
+								log( str );
+							}};
 					
-					adapter.log( "Waiting for socket manager startup" );
+					log( "Socket manager startup complete - elapsed=" + (SystemTime.getMonotonousTime() - start ));
 					
-					while( true ){
-						
-						if ( destroyed ){
-							
-							sm.destroySocketManager();
-							
-							throw( new Exception( "DHT destroyed" ));
-						}
-						
-						dht_session = sm.getSession();
-						
-						if ( dht_session != null ){
-							
-							break;
-						}
-						
-						Thread.sleep(250);
-					}
-					
-					adapter.log( "Socket manager startup complete - elapsed=" + (SystemTime.getMonotonousTime() - start ));
-					
-					Destination my_dest = dht_session.getMyDestination();
+					Destination my_dest = sm_holder.getMyDestination();
 					
 					String	full_dest 	= my_dest.toBase64() + ".i2p";
 								
 					b32_dest	= Base32.encode( my_dest.calculateHash().getData()) + ".b32.i2p";
 					
 					adapter.stateChanged( this, false );
-					
-					dht_socket_manager	= sm;
-							
-					dht_server_socket = dht_socket_manager.getServerSocket();
-					
+										
 					new AEThread2( "I2P:accepter" )
 					{
 						@Override
@@ -314,7 +340,7 @@ I2PHelperRouterDHT
 							while( !destroyed ){
 								
 								try{
-									I2PSocket socket = dht_server_socket.accept();
+									I2PSocket socket = sm_holder.accept();
 									
 									if ( socket == null ){
 										
@@ -357,9 +383,9 @@ I2PHelperRouterDHT
 					
 					if ( is_secondary ){
 						
-						if ( !use_existing_key ){
+						if ( !use_existing_key[0] ){
 							
-							new PrivateKeyFile( dest_key_file , dht_session ).write();
+							sm_holder.writePublicKey( dest_key_file );
 						}
 						
 						if ( destroyed ){
@@ -367,16 +393,16 @@ I2PHelperRouterDHT
 							throw( new Exception( "Router destroyed" ));
 						}
 
-						adapter.log( "MyDest+: " + full_dest );
-						adapter.log( "        " + b32_dest  + ", existing=" + use_existing_key );
+						log( "MyDest+: " + full_dest );
+						log( "        " + b32_dest  + ", existing=" + use_existing_key );
 
 					}else{
 						
 						Properties dht_props;
 						
-						if ( !use_existing_key ){
+						if ( !use_existing_key[0] ){
 							
-							new PrivateKeyFile( dest_key_file , dht_session ).write();
+							sm_holder.writePublicKey( dest_key_file );
 							
 							dht_props = new Properties();
 							
@@ -427,11 +453,11 @@ I2PHelperRouterDHT
 						
 						NodeInfo my_node_info = new NodeInfo( dht_nid, my_dest, dht_port );
 			
-						adapter.log( "MyDest: " + full_dest );
-						adapter.log( "        " + b32_dest  + ":" + dht_port + ", existing=" + use_existing_key );
-						adapter.log( "MyNID:  " + Base32.encode( dht_nid.getData()) + ", existing=" + use_existing_nid );
+						log( "MyDest: " + full_dest );
+						log( "        " + b32_dest  + ":" + dht_port + ", existing=" + use_existing_key );
+						log( "MyNID:  " + Base32.encode( dht_nid.getData()) + ", existing=" + use_existing_nid );
 			
-						dht = new DHTI2P( config_dir, dht_index, dht_session, my_node_info, is_bootstrap_node?null:boot_ninf, adapter );						
+						dht = new DHTI2P( config_dir, dht_index, sm_holder, my_node_info, is_bootstrap_node?null:boot_ninf, adapter );						
 					}
 					
 					initialized = true;
@@ -464,7 +490,7 @@ I2PHelperRouterDHT
 	{
 			// just used for testing, leave blocking
 		
-		return( dht_session.lookupDest( new Hash( hash ), 30*1000 ));
+		return( sm_holder.lookupDest( new Hash( hash ), 30*1000 ));
 	}
 	
 	public String
@@ -472,26 +498,16 @@ I2PHelperRouterDHT
 	{
 		return( b32_dest );
 	}
-	
-		/**
-		 * May return null
-		 * @return
-		 */
-	public I2PSocketManager
-	getDHTSocketManager()
-	{
-		return( dht_socket_manager );
-	}
-	
+		
 		/**
 		 * May return null
 		 * @return
 		 */
 	
-	public I2PSocketManager
+	public I2PSMHolder
 	getSocksSocketManager()
 	{
-		return( dht_socket_manager );
+		return( sm_holder );
 	}
 	
 		/**
@@ -557,9 +573,9 @@ I2PHelperRouterDHT
 	updateSocketManagerOptions(
 		Properties	_props )
 	{
-		I2PSocketManager sm = dht_socket_manager;
+		I2PSMHolder sh = sm_holder;
 		
-		if ( sm != null ){
+		if ( sh != null ){
 			
 			Properties props = new Properties();
 			
@@ -567,11 +583,11 @@ I2PHelperRouterDHT
 			
 			I2PHelperUtils.normalizeProperties(props);			
 			
-			sm.getSession().updateOptions( props );
+			sh.updateOptions( props );
 			
 			dht_socket_manager_properties.putAll( props );
 			
-			adapter.log( "Updating options for " + dht_index + (is_secondary?"+":"") + ": " + props );
+			log( "Updating options - " + props );
 			
 			return( true );
 		}
@@ -587,7 +603,7 @@ I2PHelperRouterDHT
 		int		peers,
 		int		min_quantity )
 	{
-		if ( dht_socket_manager == null ){
+		if ( sm_holder == null ){
 			
 			return;
 		}
@@ -682,34 +698,14 @@ I2PHelperRouterDHT
 		}
 		
 		try{
-			if ( dht_socket_manager != null ){
+			if ( sm_holder != null ){
 				
-				dht_socket_manager.destroySocketManager();
+				sm_holder.destroy();
 				
-				dht_socket_manager = null;
+				sm_holder = null;
 			}
 		}catch( Throwable f ){
 		}	
-		
-		try{
-			if ( dht_session != null ){
-				
-				dht_session.destroySession();
-				
-				dht_session = null;
-			}
-		}catch( Throwable f ){
-		}
-		
-		try{
-			if ( dht_server_socket != null ){
-				
-				dht_server_socket.close();
-				
-				dht_server_socket = null;
-			}
-		}catch( Throwable f ){
-		}
 	}
 	
 	protected void

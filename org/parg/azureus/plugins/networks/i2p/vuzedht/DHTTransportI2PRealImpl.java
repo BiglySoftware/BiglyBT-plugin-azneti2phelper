@@ -51,6 +51,8 @@ import com.biglybt.core.util.ThreadPool;
 import com.biglybt.core.util.TimerEvent;
 import com.biglybt.core.util.TimerEventPerformer;
 import com.biglybt.core.util.TimerEventPeriodic;
+
+import org.parg.azureus.plugins.networks.i2p.router.I2PSMHolder;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NID;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
 
@@ -134,7 +136,7 @@ DHTTransportI2PRealImpl
 	private static final int RPC_TYPE_UNREPLIABLE		= 3;
 
 	private final DHTI2PAdapter			adapter;
-	private final I2PSession			session;
+	private final I2PSMHolder			sm_holder;
 	private final NodeInfo				my_node;
 	private final int					query_port;
 	private final int					reply_port;
@@ -203,12 +205,12 @@ DHTTransportI2PRealImpl
 	protected
 	DHTTransportI2PRealImpl(
 		DHTI2PAdapter	_dht_adapter,
-		I2PSession 		_session,
+		I2PSMHolder 	_sm_holder,
 		NodeInfo		_my_node,
 		int				_request_timeout )
 	{
 		adapter			= _dht_adapter;
-		session 		= _session;
+		sm_holder 		= _sm_holder;
 		my_node			= _my_node;
 		request_timeout	= _request_timeout;
 		
@@ -225,8 +227,8 @@ DHTTransportI2PRealImpl
 				DHTUtilsI2P.PROTOCOL_VERSION,
 				RandomUtils.nextAbsoluteInt(), 0, (byte)0 );
 		
-        session.addMuxedSessionListener( this, I2PSession.PROTO_DATAGRAM_RAW, reply_port );
-        session.addMuxedSessionListener( this, I2PSession.PROTO_DATAGRAM, query_port );
+		sm_holder.addMuxedSessionListener( this, I2PSession.PROTO_DATAGRAM_RAW, reply_port );
+		sm_holder.addMuxedSessionListener( this, I2PSession.PROTO_DATAGRAM, query_port );
         
         timer_event = 
 				SimpleTimer.addPeriodicEvent(
@@ -1757,7 +1759,7 @@ DHTTransportI2PRealImpl
 				// already async. Also we want to force the lookup regardless of whether or not
 				// we have a dest
 			
-			Destination dest = session.lookupDest( node.getHash(), DHTUtilsI2P.DEST_LOOKUP_TIMEOUT );
+			Destination dest = sm_holder.lookupDest( node.getHash(), DHTUtilsI2P.DEST_LOOKUP_TIMEOUT );
         
             if ( dest != null ){
             
@@ -1803,7 +1805,7 @@ DHTTransportI2PRealImpl
     	
     	throws Exception
     {
-    	if ( session.isClosed()){
+    	if ( sm_holder.isSessionClosed()){
     		
            	throw( new DHTTransportException( "Session closed" ));
     	}
@@ -1931,7 +1933,7 @@ DHTTransportI2PRealImpl
 							Destination dest = null;
 							
 							try{
-								dest = session.lookupDest( node.getHash(), DHTUtilsI2P.DEST_LOOKUP_TIMEOUT );
+								dest = sm_holder.lookupDest( node.getHash(), DHTUtilsI2P.DEST_LOOKUP_TIMEOUT );
 								
 							}finally{
 								
@@ -2200,10 +2202,8 @@ DHTTransportI2PRealImpl
         int fromPort = query_port;
         
         if ( rpc_type != RPC_TYPE_UNREPLIABLE ){
-        	
-            I2PDatagramMaker dgMaker = new I2PDatagramMaker( session );
-            
-            payload = dgMaker.makeI2PDatagram( payload );
+        	            
+            payload = sm_holder.makeI2PDatagram( payload );
             
             if ( payload == null ){
                
@@ -2229,7 +2229,7 @@ DHTTransportI2PRealImpl
         stats.total_packets_sent++;
         stats.total_bytes_sent += payload.length;
         
-        if ( session.sendMessage(
+        if ( sm_holder.sendMessage(
            		dest, 
            		payload, 
            		0, 

@@ -32,6 +32,7 @@ import com.biglybt.core.util.Debug;
 import com.biglybt.pif.PluginInterface;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouter;
+import org.parg.azureus.plugins.networks.i2p.router.I2PSMHolder;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NID;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
 
@@ -101,16 +102,16 @@ DHTAZClient
 							throw( new Exception( "Server Destroyed" ));
 						}
 						
-						I2PSession		session		= inst.getSession();
+						I2PSMHolder		sm_holder		= inst.getSMHolder();
 						
-						if ( session == null ){
+						if ( sm_holder == null ){
 							
 							Thread.sleep( 1000 );
 							
 							continue;
 						}
 												
-						Destination my_dest = session.getMyDestination();
+						Destination my_dest = sm_holder.getMyDestination();
 						
 						NID dht_nid = NodeInfo.generateNID( my_dest.calculateHash(), dht_port, I2PAppContext.getGlobalContext().random());
 		
@@ -127,7 +128,7 @@ DHTAZClient
 									{
 									}
 								},
-								session, 
+								sm_holder, 
 								my_node, 
 								DHTUtilsI2P.REQUEST_TIMEOUT );
 							
