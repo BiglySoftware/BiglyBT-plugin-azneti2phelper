@@ -395,7 +395,7 @@ I2PHelperRouterDHT
 						}
 
 						log( "MyDest+: " + full_dest );
-						log( "        " + b32_dest  + ", existing=" + use_existing_key );
+						log( "        " + b32_dest  + ", existing=" + use_existing_key[0] );
 
 					}else{
 						
