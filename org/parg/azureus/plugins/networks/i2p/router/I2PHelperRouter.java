@@ -1441,7 +1441,8 @@ I2PHelperRouter
 					{
 						@Override
 						protected I2PSocketManager 
-						createSocketManager()
+						createSocketManager(
+							boolean	recovering )
 						
 							throws Exception
 						{

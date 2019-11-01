@@ -216,7 +216,8 @@ I2PHelperRouterDHT
 						{
 							@Override
 							protected I2PSocketManager 
-							createSocketManager()
+							createSocketManager(
+								boolean		recovering )
 							
 								throws Exception
 							{
@@ -226,7 +227,7 @@ I2PHelperRouterDHT
 				
 						        while( true ){
 						        				        
-									if ( use_existing_key[0] ){
+									if ( recovering || use_existing_key[0] ){
 							         	
 							    		InputStream is = new FileInputStream( dest_key_file );
 							    	
@@ -259,7 +260,7 @@ I2PHelperRouterDHT
 												// Seen borked key files causing us to get here as well
 												// delete key file and try once more
 											
-											if ( !tried_new_key ) {
+											if ( !tried_new_key && !recovering ) {
 												
 												log( "Forcing new key" );
 												

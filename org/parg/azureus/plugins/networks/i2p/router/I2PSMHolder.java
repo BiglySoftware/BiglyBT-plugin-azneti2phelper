@@ -41,7 +41,8 @@ public abstract class
 I2PSMHolder
 {
 	protected abstract I2PSocketManager
-	createSocketManager()
+	createSocketManager(
+		boolean		recovering )
 	
 		throws Exception;
 	
@@ -74,7 +75,7 @@ I2PSMHolder
 	
 		throws Exception
 	{
-		socket_manager = createSocketManager();
+		socket_manager = createSocketManager( false );
 			
 		if ( socket_manager == null ){
 			
@@ -141,7 +142,7 @@ I2PSMHolder
 										}
 										
 										try{
-											I2PSocketManager rep_sm = createSocketManager();
+											I2PSocketManager rep_sm = createSocketManager( true );
 											
 											I2PSession	rep_session = getSession( rep_sm );
 											
