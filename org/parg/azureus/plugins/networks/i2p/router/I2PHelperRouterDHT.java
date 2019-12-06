@@ -455,7 +455,7 @@ I2PHelperRouterDHT
 						NodeInfo my_node_info = new NodeInfo( dht_nid, my_dest, dht_port );
 			
 						log( "MyDest: " + full_dest );
-						log( "        " + b32_dest  + ":" + dht_port + ", existing=" + use_existing_key );
+						log( "        " + b32_dest  + ":" + dht_port + ", existing=" + use_existing_key[0] );
 						log( "MyNID:  " + Base32.encode( dht_nid.getData()) + ", existing=" + use_existing_nid );
 			
 						dht = new DHTI2P( config_dir, dht_index, sm_holder, my_node_info, is_bootstrap_node?null:boot_ninf, adapter );						

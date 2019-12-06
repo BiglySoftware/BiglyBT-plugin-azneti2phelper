@@ -24,11 +24,7 @@
 package org.parg.azureus.plugins.networks.i2p;
 
 import java.io.BufferedInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-
-
-
 
 
 import java.io.FileInputStream;
@@ -45,7 +41,6 @@ import java.net.URLConnection;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -57,10 +52,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import net.i2p.I2PAppContext;
 import net.i2p.client.streaming.I2PSocket;
-import net.i2p.client.streaming.I2PSocketManager;
-import net.i2p.client.streaming.I2PSocketOptions;
 import net.i2p.data.Base32;
 import net.i2p.data.Base64;
 import net.i2p.data.Destination;
@@ -73,8 +65,6 @@ import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.stats.transfer.LongTermStats;
 import com.biglybt.core.stats.transfer.StatsFactory;
-import com.biglybt.core.torrent.TOTorrent;
-import com.biglybt.core.torrent.TOTorrentFactory;
 import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.AESemaphore;
@@ -3709,316 +3699,316 @@ I2PHelperPlugin
 		return( null );
 	}
 	
-	private byte[] 
-	handleMaggotRequest(
-		final MagnetURIHandlerProgressListener	progress,
-		final byte[]							hash,
-		final String							args,
-		final long								timeout )
-		
-		throws MagnetURIHandlerException
-	{
-		String[]	bits = args.split( "&" );
-		
-		String sha1 = null;
-		
-		for ( String bit: bits ){
-			
-			String[] temp = bit.trim().split( "=" );
-			
-			if ( temp[0].equals( "maggot_sha1" )){
-				
-				sha1 = temp[1];
-				
-				break;
-			}
-		}
-		
-		final String	sha1_hash 	= sha1;
-		final String	info_hash	= ByteFormatter.encodeString( hash );
-		
-		final byte[][]	result = { null };
-		
-		final AESemaphore	wait_sem = new AESemaphore( "maggot:wait" );
-		
-		new AEThread2( "maggotLookup" )
-		{
-			private int		active_gets;
-			private boolean	complete;
-			
-			private List<String>	pending_gets = new ArrayList<String>();
-			
-			@Override
-			public void
-			run()
-			{
-				try{
-					long	start = SystemTime.getMonotonousTime();
-					
-					I2PHelperTracker t = getTracker( timeout );
-					
-					long	remaining = timeout - ( SystemTime.getMonotonousTime() - start );
-
-					if ( t == null || remaining < 5*1000 ){
-						
-						throw( new Exception( "Timeout waiting for tracker" ));
-					}
-										
-					t.get( 
-						hash,
-						"Maggot lookup",
-						(byte)0,
-						16,
-						remaining,
-						new I2PHelperDHTListener()
-						{
-							@Override
-							public void
-							searching(
-								String host ) 
-							{
-								progress.reportActivity( "I2P: Searching " + host );
-							}
-							
-							@Override
-							public void 
-							valueRead(
-								DHTTransportContactI2P		contact,
-								String 						host,
-								int							contact_state )
-							{
-								if ( progress.cancelled()){
-									
-									return;
-								}
-	
-									// remember the contact version is that of the node frmo which the reply was received,
-									// NOT the host value returned....
-								
-								progress.reportActivity( "I2P: Found " + host );
-								
-								synchronized( result ){
-									
-									if ( result[0] != null ){
-										
-										return;
-									}
-									
-									pending_gets.add( host );
-
-									if ( active_gets > 5 ){										
-										
-										return;
-										
-									}else{
-										
-										new AEThread2( "maggotLookup:get" )
-										{
-											@Override
-											public void
-											run()
-											{
-												while( !progress.cancelled()){
-													
-													String host;
-													
-													synchronized( result ){
-														
-														if ( result[0] != null || pending_gets.isEmpty()){
-															
-															active_gets--;
-															
-															if ( active_gets == 0 && complete ){
-																
-																wait_sem.release();
-															}
-															
-															break;
-														}
-														
-														host = pending_gets.remove(0);
-													}
-													
-													try{
-								        				
-								        					// if we ever re-enable this then we'd need to think which DHT we used for maggot
-								        					// lookups...
-								        				
-								        				if ( true ){
-								        					
-								        					throw( new Exception( "derp" ));
-								        				}
-								        				
-								        				/*
-								        				 
-								        				Destination dest = I2PAppContext.getGlobalContext().namingService().lookup( host );
-
-								        				I2PSocketManager socket_manager = router.selectDHT().getDHTSocketManager();
-
-								        				I2PSocketOptions opts = socket_manager.buildOptions();
-								        				
-								        				opts.setPort( 80 );
-								        				
-								        				opts.setConnectTimeout( 30*1000 );
-								        				
-								        				opts.setReadTimeout( 30*1000 );
-								        				
-								        				I2PSocket socket = socket_manager.connect( dest, opts );
-								        				
-								        				try{
-									        				OutputStream os = socket.getOutputStream();
-									        											
-									        				os.write(( "GET /" + info_hash + ":" + sha1_hash + " HTTP/1.1\r\n\r\n" ).getBytes( "ISO8859-1" ));
-									        				
-									        				os.flush();
-									        				
-									        				InputStream is = socket.getInputStream();
-									        				
-									        				ByteArrayOutputStream baos = new ByteArrayOutputStream( 64*1024 );
-									        				
-									        				while( true ){
-									        					
-									        					if ( progress.cancelled()){
-									        						
-									        						throw( new Exception( "Cancelled" ));
-									        					}
-									        					
-									        					byte[]	buffer = new byte[65536];
-									        					
-									        					int	len = is.read( buffer );
-									        					
-									        					if ( len <= 0 ){
-									        						
-									        						break;
-									        					}
-									        					
-									        					if ( baos.size() > 5*1024*1024 ){
-									        						
-									        						throw( new Exception( "Data too large" ));
-									        					}
-									        					
-									        					baos.write( buffer, 0, len );
-									        				}
-									        				
-									        				byte[] response_bytes = baos.toByteArray();
-									        													        					
-									        				for ( int i=4;i<response_bytes.length;i++){
-									        					
-									        					if ( 	response_bytes[i-4] == '\r' && 
-									        							response_bytes[i-3] == '\n' &&
-									       								response_bytes[i-2] == '\r' &&
-									       								response_bytes[i-1] == '\n' ){
-									        							
-									        						byte[] torrent_bytes = new byte[response_bytes.length-i];
-									        						
-									        						System.arraycopy( response_bytes, i, torrent_bytes, 0, torrent_bytes.length );
-									        						
-											        				TOTorrent torrent = TOTorrentFactory.deserialiseFromBEncodedByteArray( torrent_bytes );
-											        				
-											        				if ( torrent != null && Arrays.equals( torrent.getHash(), hash )){
-											        					
-											        					try{
-										        							TorrentUtils.setNetworkCache( torrent, Arrays.asList( AENetworkClassifier.AT_I2P ));
-											        						
-											        					}catch( Throwable e ){
-											        					}
-											        					
-											        					synchronized( result ){
-											        					
-											        						if ( result[0] == null ){
-											        							
-											        							result[0] = torrent_bytes;
-											        							
-											        							wait_sem.release();
-											        						}
-											        					}
-											        				}
-											        				
-											        				break;
-									        					}
-									        				}
-								        				}finally{
-								        				
-								        					try{
-								        						socket.getOutputStream().close();
-								        						
-								        					}catch( Throwable e ){
-								        					}
-								        					
-								        					try{
-								        						socket.getInputStream().close();
-								        						
-								        					}catch( Throwable e ){
-								        					}
-								        					
-								        					socket.close();
-								        				}
-								        				*/
-													}catch( Throwable e ){
-														
-													}
-												}
-											}
-										}.start();
-										
-										active_gets++;
-									}
-								}
-							}
-							
-							@Override
-							public void
-							complete(
-								boolean timeout ) 
-							{
-								synchronized( result ){
-									
-									complete = true;
-									
-									if ( active_gets == 0 ){
-									
-										wait_sem.release();
-									}
-								}
-							}
-						});
-					
-				}catch( Throwable e ){
-					
-					wait_sem.release();
-				}
-			}
-		}.start();
-		
-		while( true ){
-			
-			if ( wait_sem.reserve(1000)){
-			
-				break;
-				
-			}else{
-				
-				if ( progress.cancelled()){
-					
-					break;
-				}
-			}
-		}
-		
-		boolean	worked = false;
-		
-		try{
-			synchronized( result ){
-			
-				worked = result[0] != null;
-				
-				return( result[0] );
-			}
-		}finally{
-			
-			progress.reportActivity( "Maggot lookup " + (worked?"succeeded":"failed" ));
-		}
-	}
+//	private byte[] 
+//	handleMaggotRequest(
+//		final MagnetURIHandlerProgressListener	progress,
+//		final byte[]							hash,
+//		final String							args,
+//		final long								timeout )
+//		
+//		throws MagnetURIHandlerException
+//	{
+//		String[]	bits = args.split( "&" );
+//		
+//		String sha1 = null;
+//		
+//		for ( String bit: bits ){
+//			
+//			String[] temp = bit.trim().split( "=" );
+//			
+//			if ( temp[0].equals( "maggot_sha1" )){
+//				
+//				sha1 = temp[1];
+//				
+//				break;
+//			}
+//		}
+//		
+//		final String	sha1_hash 	= sha1;
+//		final String	info_hash	= ByteFormatter.encodeString( hash );
+//		
+//		final byte[][]	result = { null };
+//		
+//		final AESemaphore	wait_sem = new AESemaphore( "maggot:wait" );
+//		
+//		new AEThread2( "maggotLookup" )
+//		{
+//			private int		active_gets;
+//			private boolean	complete;
+//			
+//			private List<String>	pending_gets = new ArrayList<String>();
+//			
+//			@Override
+//			public void
+//			run()
+//			{
+//				try{
+//					long	start = SystemTime.getMonotonousTime();
+//					
+//					I2PHelperTracker t = getTracker( timeout );
+//					
+//					long	remaining = timeout - ( SystemTime.getMonotonousTime() - start );
+//
+//					if ( t == null || remaining < 5*1000 ){
+//						
+//						throw( new Exception( "Timeout waiting for tracker" ));
+//					}
+//										
+//					t.get( 
+//						hash,
+//						"Maggot lookup",
+//						(byte)0,
+//						16,
+//						remaining,
+//						new I2PHelperDHTListener()
+//						{
+//							@Override
+//							public void
+//							searching(
+//								String host ) 
+//							{
+//								progress.reportActivity( "I2P: Searching " + host );
+//							}
+//							
+//							@Override
+//							public void 
+//							valueRead(
+//								DHTTransportContactI2P		contact,
+//								String 						host,
+//								int							contact_state )
+//							{
+//								if ( progress.cancelled()){
+//									
+//									return;
+//								}
+//	
+//									// remember the contact version is that of the node frmo which the reply was received,
+//									// NOT the host value returned....
+//								
+//								progress.reportActivity( "I2P: Found " + host );
+//								
+//								synchronized( result ){
+//									
+//									if ( result[0] != null ){
+//										
+//										return;
+//									}
+//									
+//									pending_gets.add( host );
+//
+//									if ( active_gets > 5 ){										
+//										
+//										return;
+//										
+//									}else{
+//										
+//										new AEThread2( "maggotLookup:get" )
+//										{
+//											@Override
+//											public void
+//											run()
+//											{
+//												while( !progress.cancelled()){
+//													
+//													String host;
+//													
+//													synchronized( result ){
+//														
+//														if ( result[0] != null || pending_gets.isEmpty()){
+//															
+//															active_gets--;
+//															
+//															if ( active_gets == 0 && complete ){
+//																
+//																wait_sem.release();
+//															}
+//															
+//															break;
+//														}
+//														
+//														host = pending_gets.remove(0);
+//													}
+//													
+//													try{
+//								        				
+//								        					// if we ever re-enable this then we'd need to think which DHT we used for maggot
+//								        					// lookups...
+//								        				
+//								        				if ( true ){
+//								        					
+//								        					throw( new Exception( "derp" ));
+//								        				}
+//								        				
+//								        				/*
+//								        				 
+//								        				Destination dest = I2PAppContext.getGlobalContext().namingService().lookup( host );
+//
+//								        				I2PSocketManager socket_manager = router.selectDHT().getDHTSocketManager();
+//
+//								        				I2PSocketOptions opts = socket_manager.buildOptions();
+//								        				
+//								        				opts.setPort( 80 );
+//								        				
+//								        				opts.setConnectTimeout( 30*1000 );
+//								        				
+//								        				opts.setReadTimeout( 30*1000 );
+//								        				
+//								        				I2PSocket socket = socket_manager.connect( dest, opts );
+//								        				
+//								        				try{
+//									        				OutputStream os = socket.getOutputStream();
+//									        											
+//									        				os.write(( "GET /" + info_hash + ":" + sha1_hash + " HTTP/1.1\r\n\r\n" ).getBytes( "ISO8859-1" ));
+//									        				
+//									        				os.flush();
+//									        				
+//									        				InputStream is = socket.getInputStream();
+//									        				
+//									        				ByteArrayOutputStream baos = new ByteArrayOutputStream( 64*1024 );
+//									        				
+//									        				while( true ){
+//									        					
+//									        					if ( progress.cancelled()){
+//									        						
+//									        						throw( new Exception( "Cancelled" ));
+//									        					}
+//									        					
+//									        					byte[]	buffer = new byte[65536];
+//									        					
+//									        					int	len = is.read( buffer );
+//									        					
+//									        					if ( len <= 0 ){
+//									        						
+//									        						break;
+//									        					}
+//									        					
+//									        					if ( baos.size() > 5*1024*1024 ){
+//									        						
+//									        						throw( new Exception( "Data too large" ));
+//									        					}
+//									        					
+//									        					baos.write( buffer, 0, len );
+//									        				}
+//									        				
+//									        				byte[] response_bytes = baos.toByteArray();
+//									        													        					
+//									        				for ( int i=4;i<response_bytes.length;i++){
+//									        					
+//									        					if ( 	response_bytes[i-4] == '\r' && 
+//									        							response_bytes[i-3] == '\n' &&
+//									       								response_bytes[i-2] == '\r' &&
+//									       								response_bytes[i-1] == '\n' ){
+//									        							
+//									        						byte[] torrent_bytes = new byte[response_bytes.length-i];
+//									        						
+//									        						System.arraycopy( response_bytes, i, torrent_bytes, 0, torrent_bytes.length );
+//									        						
+//											        				TOTorrent torrent = TOTorrentFactory.deserialiseFromBEncodedByteArray( torrent_bytes );
+//											        				
+//											        				if ( torrent != null && Arrays.equals( torrent.getHash(), hash )){
+//											        					
+//											        					try{
+//										        							TorrentUtils.setNetworkCache( torrent, Arrays.asList( AENetworkClassifier.AT_I2P ));
+//											        						
+//											        					}catch( Throwable e ){
+//											        					}
+//											        					
+//											        					synchronized( result ){
+//											        					
+//											        						if ( result[0] == null ){
+//											        							
+//											        							result[0] = torrent_bytes;
+//											        							
+//											        							wait_sem.release();
+//											        						}
+//											        					}
+//											        				}
+//											        				
+//											        				break;
+//									        					}
+//									        				}
+//								        				}finally{
+//								        				
+//								        					try{
+//								        						socket.getOutputStream().close();
+//								        						
+//								        					}catch( Throwable e ){
+//								        					}
+//								        					
+//								        					try{
+//								        						socket.getInputStream().close();
+//								        						
+//								        					}catch( Throwable e ){
+//								        					}
+//								        					
+//								        					socket.close();
+//								        				}
+//								        				*/
+//													}catch( Throwable e ){
+//														
+//													}
+//												}
+//											}
+//										}.start();
+//										
+//										active_gets++;
+//									}
+//								}
+//							}
+//							
+//							@Override
+//							public void
+//							complete(
+//								boolean timeout ) 
+//							{
+//								synchronized( result ){
+//									
+//									complete = true;
+//									
+//									if ( active_gets == 0 ){
+//									
+//										wait_sem.release();
+//									}
+//								}
+//							}
+//						});
+//					
+//				}catch( Throwable e ){
+//					
+//					wait_sem.release();
+//				}
+//			}
+//		}.start();
+//		
+//		while( true ){
+//			
+//			if ( wait_sem.reserve(1000)){
+//			
+//				break;
+//				
+//			}else{
+//				
+//				if ( progress.cancelled()){
+//					
+//					break;
+//				}
+//			}
+//		}
+//		
+//		boolean	worked = false;
+//		
+//		try{
+//			synchronized( result ){
+//			
+//				worked = result[0] != null;
+//				
+//				return( result[0] );
+//			}
+//		}finally{
+//			
+//			progress.reportActivity( "Maggot lookup " + (worked?"succeeded":"failed" ));
+//		}
+//	}
 	
 	private AtomicInteger	active_maggot_requests 	= new AtomicInteger();
 	private BloomFilter		maggot_bloom			= null;
@@ -4174,53 +4164,53 @@ I2PHelperPlugin
 		}.start();
 	}
 	
-	private void
-	runPipe(
-		final InputStream		from,
-		final OutputStream		to,
-		final Runnable			on_complete )
-	{
-		new AEThread2( "I2P.in.pipe" )
-		{
-			@Override
-			public void
-			run()
-			{
-				try{
-					byte[]	buffer = new byte[16*1024];
-					
-					while( !unloaded ){
-					
-						int	len = from.read( buffer );
-						
-						if ( len <= 0 ){
-							
-							break;
-						}
-						
-						to.write( buffer, 0, len );
-					}
-				}catch( Throwable e ){
-					
-				}finally{
-					
-					try{
-						from.close();
-						
-					}catch( Throwable e ){
-					}
-					
-					try{
-						to.close();
-						
-					}catch( Throwable e ){
-					}
-					
-					on_complete.run();
-				}
-			}
-		}.start();
-	}
+//	private void
+//	runPipe(
+//		final InputStream		from,
+//		final OutputStream		to,
+//		final Runnable			on_complete )
+//	{
+//		new AEThread2( "I2P.in.pipe" )
+//		{
+//			@Override
+//			public void
+//			run()
+//			{
+//				try{
+//					byte[]	buffer = new byte[16*1024];
+//					
+//					while( !unloaded ){
+//					
+//						int	len = from.read( buffer );
+//						
+//						if ( len <= 0 ){
+//							
+//							break;
+//						}
+//						
+//						to.write( buffer, 0, len );
+//					}
+//				}catch( Throwable e ){
+//					
+//				}finally{
+//					
+//					try{
+//						from.close();
+//						
+//					}catch( Throwable e ){
+//					}
+//					
+//					try{
+//						to.close();
+//						
+//					}catch( Throwable e ){
+//					}
+//					
+//					on_complete.run();
+//				}
+//			}
+//		}.start();
+//	}
 	
 	@Override
 	public void
@@ -4489,7 +4479,7 @@ I2PHelperPlugin
 					
 				// System.out.println( "proxy_map=" + proxy_map.size());
 
-				String 	host 				= entry.getHost();
+				// String 	host 				= entry.getHost();
 				
 				/*
 				if ( good ){
@@ -5351,26 +5341,26 @@ I2PHelperPlugin
 		}
 	}
 	
-	private String
-	getOptionsString(
-		Map<String,Object>	opts )
-	{
-		String[] nets = (String[])opts.get( "peer_networks" );
-		
-		if ( nets != null ){
-			
-			String str = "";
-			
-			for ( String net: nets ){
-				
-				str += (str.length()==0?"":",") + net;
-			}
-			
-			return( "peer_networks=" + str );
-		}
-		
-		return( "" );
-	}
+//	private String
+//	getOptionsString(
+//		Map<String,Object>	opts )
+//	{
+//		String[] nets = (String[])opts.get( "peer_networks" );
+//		
+//		if ( nets != null ){
+//			
+//			String str = "";
+//			
+//			for ( String net: nets ){
+//				
+//				str += (str.length()==0?"":",") + net;
+//			}
+//			
+//			return( "peer_networks=" + str );
+//		}
+//		
+//		return( "" );
+//	}
 
 	private boolean
 	testPort(
@@ -5462,17 +5452,17 @@ I2PHelperPlugin
 			intermediate_host	= _intermediate_host;
 		}
 		
-		private long
-		getCreateTime()
-		{
-			return( created );
-		}
-		
-		private String
-		getHost()
-		{
-			return( host );
-		}
+//		private long
+//		getCreateTime()
+//		{
+//			return( created );
+//		}
+//		
+//		private String
+//		getHost()
+//		{
+//			return( host );
+//		}
 		
 		private String
 		getIntermediateHost()
