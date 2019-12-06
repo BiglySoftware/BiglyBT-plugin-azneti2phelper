@@ -1,6 +1,6 @@
 #
 # If you have a 'split' directory installation, with configuration
-# files in ~/.i2p (Linux), %APPDATA%\I2P (Windows),
+# files in ~/.i2p (Linux), %LOCALAPPDATA%\I2P (Windows),
 # or /Users/(user)/Library/Application Support/i2p (Mac), be sure to
 # edit the file in the configuration directory, NOT the install directory.
 # When running as a Linux daemon, the configuration directory is /var/lib/i2p
@@ -106,6 +106,7 @@ Sybil:150.95.134.159
 Sybil:150.95.144.95
 Sybil:150.95.147.89
 Sybil:150.95.153.220
+Sybil:160.36.130.0/24
 Sybil:163.44.149.31
 Sybil:2001;df6;b800;1128;a163;44;149;310
 Sybil:2001;19f0;4400;4376;5400;ff;fe47;bcbd
