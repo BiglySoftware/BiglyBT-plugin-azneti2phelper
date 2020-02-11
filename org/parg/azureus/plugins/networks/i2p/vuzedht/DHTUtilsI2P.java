@@ -34,9 +34,10 @@ DHTUtilsI2P
 	public static final int		PROTOCOL_VERSION_INITIAL		= 1;	// testing adding version to messages
 	public static final int		PROTOCOL_VERSION_AZ_MSGS		= 2;	// support vuze messaging
 	public static final int		PROTOCOL_VERSION_BRIDGE			= 3;	// support DHT bridging
+	public static final int		PROTOCOL_VERSION_ALT_CONTACTS	= 4;	// support alternate contacts
 	
 
-	protected static final byte PROTOCOL_VERSION		= PROTOCOL_VERSION_BRIDGE;
+	protected static final byte PROTOCOL_VERSION		= PROTOCOL_VERSION_ALT_CONTACTS;
 	protected static final byte PROTOCOL_VERSION_MIN	= PROTOCOL_VERSION_INITIAL;
 	
 	protected static final int		REQUEST_TIMEOUT		= 30*1000;	// from observation requests rarely complete in > 30 sec

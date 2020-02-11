@@ -33,6 +33,7 @@ import com.biglybt.core.util.ByteArrayHashMap;
 import com.biglybt.core.util.Debug;
 import com.biglybt.pif.PluginInterface;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
+import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouter;
 
 import com.biglybt.core.dht.DHT;
 import com.biglybt.core.dht.DHTFactory;
@@ -98,7 +99,9 @@ DHTAZ
 					public DHTLogger getLogger() {
 						return( base );
 					}
-				}, base_transport );
+				}, 
+				base_transport,
+				base.getDHTIndex() == I2PHelperRouter.DHT_MIX );
 		
 		Properties	props = new Properties();
 	

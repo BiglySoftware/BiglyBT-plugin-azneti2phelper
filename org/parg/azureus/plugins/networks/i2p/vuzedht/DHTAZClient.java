@@ -153,7 +153,7 @@ DHTAZClient
 										
 										return( DHTAZClient.this );
 									}
-								}, base_transport );
+								}, base_transport, false );
 		
 						//transport.setTraceOn( true );
 						

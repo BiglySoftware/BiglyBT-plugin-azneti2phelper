@@ -34,6 +34,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerStats;
 import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.peer.PEPeerSource;
@@ -2225,18 +2226,25 @@ I2PDHTTrackerPlugin
 				
 				if ( run_data == null || run_data[0] == REG_TYPE_DERIVED ){
 					
-		 			DownloadManagerStats stats = PluginCoreUtils.unwrap( download ).getStats();
-	    			
-	    				// hack atm rather than recording 'has ever been started' state just look at data
-	    				// might have been added for seeding etc so don't just use bytes downloaded
-		 				// this is to avoid scraping/registering downloads that have yet to be
-		 				// started (and might be having their enabled networks adjusted)
-	    			
-	    			if ( stats.getTotalDataBytesReceived() == 0 && stats.getPercentDoneExcludingDND() == 0 ){
-	    				
-	    				continue;
-	    			}
-	    			
+		 			DownloadManager core_dm = PluginCoreUtils.unwrapIfPossible( download );
+
+		 				// might be a LWSDownload...
+		 			
+		 			if ( core_dm != null ){
+		 				
+			 			DownloadManagerStats stats = core_dm.getStats();
+		    			
+		    				// hack atm rather than recording 'has ever been started' state just look at data
+		    				// might have been added for seeding etc so don't just use bytes downloaded
+			 				// this is to avoid scraping/registering downloads that have yet to be
+			 				// started (and might be having their enabled networks adjusted)
+		    			
+		    			if ( stats.getTotalDataBytesReceived() == 0 && stats.getPercentDoneExcludingDND() == 0 ){
+		    				
+		    				continue;
+		    			}
+		 			}
+		 			
 					boolean	force =  torrent.wasCreatedByUs();
 					
 					if ( !force ){
