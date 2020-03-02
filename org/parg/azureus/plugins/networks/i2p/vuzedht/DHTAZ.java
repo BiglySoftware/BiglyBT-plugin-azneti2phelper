@@ -24,6 +24,7 @@
 package org.parg.azureus.plugins.networks.i2p.vuzedht;
 
 import java.io.File;
+import java.util.Map;
 import java.util.Properties;
 
 
@@ -33,7 +34,6 @@ import com.biglybt.core.util.ByteArrayHashMap;
 import com.biglybt.core.util.Debug;
 import com.biglybt.pif.PluginInterface;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
-import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouter;
 
 import com.biglybt.core.dht.DHT;
 import com.biglybt.core.dht.DHTFactory;
@@ -58,10 +58,12 @@ DHTAZ
 	private DHTTransportI2P			base_transport;
 	
 	private DHT 					dht;
+	private DHTPluginStorageManager storage_manager;
 	private DHTTransportAZ			transport;
 	
+	private DHTBG					dht_bg;
 	
-	private ByteArrayHashMap<String>	base_contacts = new ByteArrayHashMap<String>();
+	private ByteArrayHashMap<String>	az_contacts = new ByteArrayHashMap<String>();
 	
 	public
 	DHTAZ(
@@ -82,8 +84,8 @@ DHTAZ
 			storage_dir.mkdirs();
 		}
 
-		DHTPluginStorageManager storage_manager = new DHTPluginStorageManager( DHTUtilsI2P.DHT_NETWORK, this, storage_dir );
-
+		storage_manager = new DHTPluginStorageManager( DHTUtilsI2P.DHT_NETWORK, this, storage_dir );
+		
 		base_transport = base.getTransport();
 		
 		transport = 
@@ -99,9 +101,69 @@ DHTAZ
 					public DHTLogger getLogger() {
 						return( base );
 					}
+					
+					@Override
+					public void 
+					contactAlive(
+						DHTTransportContactAZ contact)
+					{
+						if ( dht_bg != null ){
+							
+							dht_bg.contactAlive( contact );
+						}
+					}
+					
+					@Override
+					public void 
+					contactDead(
+						DHTTransportContactAZ contact)
+					{
+						if ( dht_bg != null ){
+							
+							dht_bg.contactDead( contact );
+						}
+					}
+					
+					@Override
+					public void
+					sendPingPreprocess(
+						DHTTransportContactAZ		contact,
+						Map<String,Object>			payload )
+					{
+						if ( dht_bg != null ){
+						
+							dht_bg.sendPingPreprocess( contact, payload );
+						}
+					}
+					
+					@Override
+					public void
+					sendPingPostprocess(
+						DHTTransportContactAZ		contact,
+						Map<String,Object>			payload )
+					{
+						if ( dht_bg != null ){
+							
+							dht_bg.sendPingPostprocess( contact, payload );
+						}
+					}
+					
+					@Override
+					public void
+					receivePingPostprocess(
+						DHTTransportContactAZ		contact,
+						Map<String,Object>			payload )
+					{
+						if ( dht_bg != null ){
+							
+							dht_bg.receivePingPostprocess( contact, payload );
+						}
+					}
 				}, 
-				base_transport,
-				base.getDHTIndex() == I2PHelperRouter.DHT_MIX );
+				base_transport );
+		
+		dht_bg = new DHTBG( base, transport, _adapter );
+
 		
 		Properties	props = new Properties();
 	
@@ -117,10 +179,17 @@ DHTAZ
 					null,
 					this );
 	
+		storage_manager.importContacts( dht );
 		
 		DHT	base_dht = _i2p_dht.getDHT();
 		
 		base_dht.getRouter().addObserver( this );
+	}
+	
+	public DHTBG
+	getBGDHT()
+	{
+		return( dht_bg );
 	}
 	
 	public DHT
@@ -139,6 +208,8 @@ DHTAZ
 	setSeeded()
 	{
 		dht.getControl().setSeeded();
+		
+		dht_bg.setSeeded();
 	}
 	
 	@Override
@@ -148,13 +219,13 @@ DHTAZ
 	{
 		DHTTransportContactI2P t_cn = (DHTTransportContactI2P)((DHTControlContact)r_contact.getAttachment()).getTransportContact();
 		
-		if ( t_cn.getProtocolVersion() != DHTUtilsI2P.PROTOCOL_VERSION_NON_VUZE ){
+		if ( t_cn.getProtocolVersion() > DHTUtilsI2P.PROTOCOL_VERSION_NON_VUZE ){
 		
 			//System.out.println( "removed " + t_cn.getString());
 			
-			synchronized( base_contacts ){
+			synchronized( az_contacts ){
 				
-				base_contacts.remove( t_cn.getID());
+				az_contacts.remove( t_cn.getID());
 			}
 			
 			transport.contactDead( t_cn );
@@ -196,13 +267,13 @@ DHTAZ
 	{
 		DHTTransportContactI2P t_cn = (DHTTransportContactI2P)((DHTControlContact)r_contact.getAttachment()).getTransportContact();
 		
-		if ( t_cn.getProtocolVersion() != DHTUtilsI2P.PROTOCOL_VERSION_NON_VUZE ){
+		if ( t_cn.getProtocolVersion() > DHTUtilsI2P.PROTOCOL_VERSION_NON_VUZE ){
 		
 			//System.out.println( "added " + t_cn.getString());
 			
-			synchronized( base_contacts ){
+			synchronized( az_contacts ){
 				
-				base_contacts.put( t_cn.getID(), "" );
+				az_contacts.put( t_cn.getID(), "" );
 			}
 
 			transport.contactAlive( t_cn );
@@ -213,9 +284,9 @@ DHTAZ
 	isBaseContact(
 		DHTTransportContactAZ		contact )
 	{
-		synchronized( base_contacts ){
+		synchronized( az_contacts ){
 			
-			return( base_contacts.containsKey( contact.getID()));
+			return( az_contacts.containsKey( contact.getID()));
 		}
 	}
 	
@@ -225,7 +296,7 @@ DHTAZ
 	{
 		// for testing
 		
-		new DHTTransportContactAZ( transport, contact ).sendPing(
+		new DHTTransportContactAZ( transport, contact ).sendPingForce(
 			new DHTTransportReplyHandlerAdapter() {
 				
 				@Override
@@ -233,12 +304,13 @@ DHTAZ
 				pingReply(
 					DHTTransportContact contact )
 				{
-					System.out.println( "Got reply!" );
+					System.out.println( "Ping reply received" );
 				}
 				
 				@Override
 				public void failed(DHTTransportContact contact, Throwable error) {
-					error.printStackTrace();
+					
+					System.out.println( "Ping failed: " + Debug.getNestedExceptionMessage( error ));
 				}
 			});
 	}
@@ -392,6 +464,12 @@ DHTAZ
 	
 	}
 	
+	public long
+	getEstimatedDHTSize()
+	{
+		return( getDHT().getControl().getStats().getEstimatedDHTSize());
+	}
+	
 	@Override
 	public void
 	log(
@@ -432,5 +510,13 @@ DHTAZ
 		// this currently prevents the speed-tester from being created (which is what we want) so
 		// if this gets changed that will need to be prevented by another means
 		return( null );
+	}
+	
+	public void
+	destroy()
+	{
+		storage_manager.exportContacts( dht );
+
+		dht_bg.destroy();
 	}
 }

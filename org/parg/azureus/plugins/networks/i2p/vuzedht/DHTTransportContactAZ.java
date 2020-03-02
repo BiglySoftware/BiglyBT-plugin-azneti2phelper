@@ -229,6 +229,13 @@ DHTTransportContactAZ
 		transport.sendPing( handler, this );
 	}
 	
+	public void
+	sendPingForce(
+		DHTTransportReplyHandler	handler )
+	{
+		transport.sendPing( handler, this, false );
+	}
+	
 	@Override
 	public void
 	sendImmediatePing(

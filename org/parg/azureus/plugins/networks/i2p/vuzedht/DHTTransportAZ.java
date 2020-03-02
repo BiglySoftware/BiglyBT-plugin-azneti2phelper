@@ -29,12 +29,10 @@ import java.util.*;
 
 import net.i2p.data.Base32;
 
-import com.biglybt.core.util.BEncoder;
 import com.biglybt.core.util.ByteFormatter;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.RandomUtils;
 import com.biglybt.core.util.SystemTime;
-import com.biglybt.util.MapUtils;
 
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
 import org.parg.azureus.plugins.networks.i2p.vuzedht.DHTTransportI2P.AZRequestResult;
@@ -43,8 +41,6 @@ import com.biglybt.core.dht.DHT;
 import com.biglybt.core.dht.DHTLogger;
 import com.biglybt.core.dht.impl.DHTLog;
 import com.biglybt.core.dht.transport.DHTTransport;
-import com.biglybt.core.dht.transport.DHTTransportAlternativeContact;
-import com.biglybt.core.dht.transport.DHTTransportAlternativeNetwork;
 import com.biglybt.core.dht.transport.DHTTransportContact;
 import com.biglybt.core.dht.transport.DHTTransportException;
 import com.biglybt.core.dht.transport.DHTTransportFindValueReply;
@@ -57,7 +53,6 @@ import com.biglybt.core.dht.transport.DHTTransportStats;
 import com.biglybt.core.dht.transport.DHTTransportStoreReply;
 import com.biglybt.core.dht.transport.DHTTransportTransferHandler;
 import com.biglybt.core.dht.transport.DHTTransportValue;
-import com.biglybt.core.dht.transport.udp.impl.DHTUDPUtils;
 import com.biglybt.core.dht.transport.util.DHTTransferHandler;
 import com.biglybt.core.dht.transport.util.DHTTransportRequestCounter;
 import com.biglybt.core.dht.transport.util.DHTTransportStatsImpl;
@@ -66,15 +61,7 @@ import com.biglybt.core.dht.transport.util.DHTTransferHandler.Packet;
 public class 
 DHTTransportAZ
 	implements DHTTransport, DHTTransportI2P.AZRequestHandler
-{
-	private static final boolean TEST_AC = true;
-	
-	static{
-		if ( TEST_AC ){
-			Debug.out( "TEST_AC is ON!!!!");
-		}
-	}
-	
+{	
 	private boolean TRACE = false;
 	
 	private static final int	METHOD_PING			= 0;
@@ -94,9 +81,7 @@ DHTTransportAZ
 	private final DHTTransportI2P			base_transport;
 	
 	private final DHTTransportStatsI2P		stats;
-	
-	private final boolean					enable_alt_contacts;
-	
+		
 	private DHTTransportContactAZ		local_contact;
 	
 	private DHTTransportRequestHandler	request_handler;
@@ -117,29 +102,15 @@ DHTTransportAZ
 			}
 		};
 		
-	private DHTTransportAlternativeNetworkImpl		ipv4_net;
-	private DHTTransportAlternativeNetworkImpl		ipv6_net;
-
 	private volatile boolean			destroyed;
 	
 	protected
 	DHTTransportAZ(
 		DHTTransportAZHelper	_helper,
-		DHTTransportI2P			_base_transport,
-		boolean					_enable_alt_contacts )
+		DHTTransportI2P			_base_transport )
 	{
 		helper				= _helper;
 		base_transport		= _base_transport;
-		enable_alt_contacts	= _enable_alt_contacts;	
-		
-		if ( enable_alt_contacts ){
-			
-			ipv4_net = new DHTTransportAlternativeNetworkImpl( 4 ); // FIX ME POST 2203 DHTTransportAlternativeNetwork.AT_BIGLYBT_IPV4 );
-			ipv6_net = new DHTTransportAlternativeNetworkImpl( 5 ); // FIX ME POST 2203 DHTTransportAlternativeNetwork.AT_BIGLYBT_IPV6 );
-
-			DHTUDPUtils.registerAlternativeNetwork( ipv4_net );
-			DHTUDPUtils.registerAlternativeNetwork( ipv6_net );
-		}
 		
 		stats = new DHTTransportStatsI2P();
 				
@@ -290,14 +261,22 @@ DHTTransportAZ
 	contactAlive(
 		DHTTransportContactI2P		i2p_contact )
 	{
-		request_handler.contactImported( new DHTTransportContactAZ( this, i2p_contact ), false );
+		DHTTransportContactAZ contact = new DHTTransportContactAZ( this, i2p_contact );
+		
+		helper.contactAlive( contact );
+		
+		request_handler.contactImported( contact, false );
 	}
 	
 	protected void
 	contactDead(
 		DHTTransportContactI2P		i2p_contact )
 	{
-		request_handler.contactRemoved( new DHTTransportContactAZ( this, i2p_contact ));
+		DHTTransportContactAZ contact = new DHTTransportContactAZ( this, i2p_contact );
+
+		helper.contactDead( contact );
+		
+		request_handler.contactRemoved( contact );
 	}
 	
 	@Override
@@ -308,7 +287,7 @@ DHTTransportAZ
 	
 		throws IOException, DHTTransportException
 	{
-		throw( new DHTTransportException( "Not supported" ));
+		return( new DHTTransportContactAZ( this, (DHTTransportContactI2P)base_transport.importContact(is, is_bootstrap )));
 	}
 	
 	protected void
@@ -340,10 +319,21 @@ DHTTransportAZ
 	sendPing(
 		final DHTTransportReplyHandler		handler,
 		final DHTTransportContactAZ			contact )
+	{
+		sendPing( handler, contact, true );
+	}
+	
+	public void
+	sendPing(
+		final DHTTransportReplyHandler		handler,
+		final DHTTransportContactAZ			contact,
+		boolean								fake_if_base )
 	{		
-		boolean known = helper.isBaseContact( contact );
+		boolean fake_it = fake_if_base && helper.isBaseContact( contact );
 		
-		if ( known ){
+		if ( fake_it ){
+			
+				// base DHT has this contact so we'll leave it to handle pings as it requires
 			
 			handler.pingReply( contact, -1 );
 			
@@ -358,33 +348,9 @@ DHTTransportAZ
 
 			stats.pingSent( null );
 			
-			Map<String,Object>	payload = new HashMap<String, Object>();
+			Map<String,Object>	request_payload = new HashMap<String, Object>();
 			
-			boolean do_ac = enable_alt_contacts && ( contact.getProtocolVersion() >= DHTUtilsI2P.PROTOCOL_VERSION_ALT_CONTACTS || TEST_AC );
-			
-			if ( do_ac ){
-			
-				Map<String,Long>	ac = new HashMap<>();
-								
-				long req4 = ipv4_net.getRequiredContactCount();
-				
-				if ( req4 > 0 ){
-				
-					ac.put( String.valueOf( ipv4_net.getNetworkType()), req4 );
-				}
-				
-				long req6 = ipv6_net.getRequiredContactCount();
-				
-				if ( req6 > 0 ){
-				
-					ac.put( String.valueOf( ipv6_net.getNetworkType()), req6 );
-				}
-
-				if ( !ac.isEmpty()){
-				
-					payload.put( "ac", ac );
-				}
-			}
+			helper.sendPingPreprocess( contact, request_payload );
 			
 			sendRequest(
 				new AZReplyHandlerAdapter()
@@ -393,34 +359,12 @@ DHTTransportAZ
 					public void
 					reply(
 						DHTTransportContactI2P 		basis,
-						Map							map,
+						Map							reply_payload,
 						int							elapsed )
 					{
 						stats.pingOK();
 						
-						if ( do_ac ){
-
-							Map<String,List> ac = (Map<String,List>)map.get( "ac" );
-							
-							if ( ac != null ){
-								
-								for ( Map.Entry<String,List> entry: ac.entrySet()){
-									
-									long net = Long.parseLong( entry.getKey());
-									
-									List contacts = entry.getValue();
-									
-									if ( net == ipv4_net.getNetworkType()){
-										
-										ipv4_net.addContactsFromReply( contacts );
-										
-									}else if ( net == ipv6_net.getNetworkType()){
-										
-										ipv6_net.addContactsFromReply( contacts );
-									}
-								}
-							}
-						}
+						helper.sendPingPostprocess( contact, reply_payload );
 						
 						handler.pingReply( contact, elapsed );
 					}
@@ -440,7 +384,7 @@ DHTTransportAZ
 				METHOD_PING,
 				true,
 				false,
-				payload );
+				request_payload );
 			
 			if ( TRACE ) trace( "AZ: sendPing to " + contact.getString());
 		}
@@ -453,49 +397,11 @@ DHTTransportAZ
 	{
 		request_handler.pingRequest( contact );
 		
-		Map<String,Object> reply = new HashMap<String,Object>();
+		Map<String,Object> reply_payload = new HashMap<String,Object>();
 		 
-		boolean do_ac = enable_alt_contacts && ( contact.getProtocolVersion() >= DHTUtilsI2P.PROTOCOL_VERSION_ALT_CONTACTS || TEST_AC );
-
-		if ( do_ac ){
-
-			Map<String,Long> ac_in = (Map<String,Long>)payload.get( "ac" );
-			
-			if ( ac_in != null ){
-				
-				Map<String,List>	ac_out = new HashMap<>();
-				
-				reply.put( "ac", ac_out );
-				
-				for ( Map.Entry<String,Long> entry: ac_in.entrySet()){
-					
-					long 	net 	= Long.parseLong( entry.getKey());
-					int 	wanted 	= entry.getValue().intValue();
-					
-					List contacts;
-					
-					if ( net == ipv4_net.getNetworkType()){
-						
-						contacts = ipv4_net.getContactsForReply( wanted );
-						
-					}else if ( net == ipv6_net.getNetworkType()){
-						
-						contacts = ipv6_net.getContactsForReply( wanted );
-						
-					}else{
-						
-						contacts = null;
-					}
-					
-					if ( contacts != null ){
-						
-						ac_out.put( entry.getKey(), contacts );
-					}
-				}
-			}
-		}
+		helper.receivePingPostprocess( contact, reply_payload );
 		
-		return(reply );
+		return( reply_payload );
 	}
 		
 	public void
@@ -1607,12 +1513,6 @@ DHTTransportAZ
 			destroyed	= true;			
 
 		}
-		
-		if ( enable_alt_contacts ){
-			
-			DHTUDPUtils.unregisterAlternativeNetwork( ipv4_net );
-			DHTUDPUtils.unregisterAlternativeNetwork( ipv6_net );
-		}
 	}
 	
 	private void
@@ -1715,256 +1615,40 @@ DHTTransportAZ
 		isBaseContact(
 			DHTTransportContactAZ		contact );
 		
+		public default void
+		contactAlive(
+			DHTTransportContactAZ		contact )
+		{
+		}
+		
+		public default void
+		contactDead(
+			DHTTransportContactAZ		contact )
+		{
+		}
+		
+		public default void
+		sendPingPreprocess(
+			DHTTransportContactAZ		contact,
+			Map<String,Object>			payload )
+		{
+		}
+		
+		public default void
+		sendPingPostprocess(
+			DHTTransportContactAZ		contact,
+			Map<String,Object>			payload )
+		{
+		}
+		
+		public default void
+		receivePingPostprocess(
+			DHTTransportContactAZ		contact,
+			Map<String,Object>			payload )
+		{
+		}
+		
 		public DHTLogger
 		getLogger();
-	}
-	
-	private static class
-	DHTTransportAlternativeNetworkImpl
-		implements DHTTransportAlternativeNetwork
-	{
-		private static final int max_contacts	= 32;
-		
-		private int	network;
-		
-		private final TreeSet<DHTTransportAlternativeContact> contacts =
-			new TreeSet<>(
-					new Comparator<DHTTransportAlternativeContact>() {
-						@Override
-						public int
-						compare(
-							DHTTransportAlternativeContact o1,
-							DHTTransportAlternativeContact o2) 
-						{
-							int res = o1.getAge() - o2.getAge();
-
-							if (res == 0) {
-
-								res = o1.getID() - o2.getID();
-							}
-
-							return (res);
-						}
-					});
-		
-		private boolean contacts_disable;
-		
-		private
-		DHTTransportAlternativeNetworkImpl(
-			int			net )
-		{
-			network	= net;
-		}
-		
-		@Override
-		public int
-		getNetworkType()
-		{
-			return( network );
-		}
-		
-		private long
-		getRequiredContactCount()
-		{
-			return( 2 );	// for the moment just grab a couple every time
-		}
-		
-		private void
-		addContactsFromReply(
-			List<Map<String,Object>>		reply )
-		{
-			synchronized( contacts ){
-			
-				for ( Map m: reply ){
-					
-					try{
-						int version = MapUtils.getMapInt( m, "v", 1 );
-						int age		= MapUtils.getMapInt( m, "a", 0 );
-						
-						Map<String,Object>	properties = (Map<String,Object>)m.get( "p" );
-						
-						contacts.add( new DHTTransportAlternativeContactImpl( version, age, properties ));
-						
-					}catch( Throwable e ){
-						
-					}
-				}
-				
-				if ( contacts.size() > max_contacts + 16 ){	// don't trim every time once full ....
-					
-					int	pos = 0;
-					
-					Iterator<DHTTransportAlternativeContact> it = contacts.iterator();
-
-					while( it.hasNext()){
-		
-						it.next();
-		
-						pos++;
-		
-						if(  pos > max_contacts ){
-		
-							it.remove();
-						}
-					}
-				}
-			}
-		}
-		
-		private List<Map<String,Object>>
-		getContactsForReply(
-			int			wanted )
-		{
-			List<Map<String,Object>>	result = new ArrayList<>( wanted );
-			
-			List<DHTTransportAlternativeContact> to_return;
-
-			synchronized( contacts ){
-								
-				try{
-					contacts_disable = true;	// force use of the core provider
-					
-					to_return = DHTUDPUtils.getAlternativeContacts( network, wanted );
-					
-				}finally{
-					
-					contacts_disable = false;
-				}
-				
-				if ( to_return.size() < wanted ){
-				
-					for ( DHTTransportAlternativeContact c: contacts ){
-						
-						to_return.add( c );
-						
-						if ( to_return.size() == wanted ){
-							
-							break;
-						}
-					}
-				}
-			}
-			
-			for ( DHTTransportAlternativeContact c: to_return ){
-				
-				Map<String,Object> m = new HashMap<>();
-				
-				result.add( m );
-				
-				// m.put( "n", c.getNetworkType()); not needed
-				m.put( "v", c.getVersion());
-				m.put( "a", c.getAge());
-				m.put( "p", c.getProperties());
-			}
-			
-			return( result );
-		}
-		
-		@Override
-		public List<DHTTransportAlternativeContact>
-		getContacts(
-			int		max )
-		{
-			List<DHTTransportAlternativeContact> result = new ArrayList<DHTTransportAlternativeContact>( max );
-			
-			synchronized( contacts ){
-				
-				if ( !contacts_disable ){
-					
-					for ( DHTTransportAlternativeContact c: contacts ){
-						
-						result.add( c );
-						
-						if ( result.size() == max ){
-							
-							break;
-						}
-					}
-				}
-			}
-			
-			return( result );
-		}
-		
-		private class
-		DHTTransportAlternativeContactImpl
-			implements DHTTransportAlternativeContact
-		{
-			private final int					version;
-			private final Map<String,Object>	properties;
-			private final int					start_secs;
-			private final long	 				start_time;
-			private final int	 				id;
-			
-			private
-			DHTTransportAlternativeContactImpl(
-				int						_version,
-				int						_age_secs,
-				Map<String,Object>		_properties )
-			{
-				version		= _version;
-				properties	= _properties;
-				
-				start_secs	= _age_secs;
-				start_time 	= SystemTime.getMonotonousTime();
-				
-				int	_id;
-				
-				try{
-				
-					_id = Arrays.hashCode( BEncoder.encode( properties ));
-					
-				}catch( Throwable e ){
-					
-					Debug.out( e );
-					
-					_id = 0;
-				}
-				
-				id	= _id;
-			}
-			
-			@Override
-			public int
-			getNetworkType()
-			{
-				return( network );
-			}
-			
-			@Override
-			public int
-			getVersion()
-			{
-				return( version );
-			}
-			
-			@Override
-			public int
-			getID()
-			{
-				return( id );
-			}
-			
-			@Override
-			public int
-			getLastAlive()
-			{
-				return( 0 );	// deprecated
-			}
-			
-			@Override
-			public int
-			getAge()
-			{
-				return(start_secs + (int)((SystemTime.getMonotonousTime() - start_time )/1000 ));
-			}
-			
-			@Override
-			public Map<String,Object>
-			getProperties()
-			{
-				return( properties );
-			}
-		}
 	}
 }

@@ -58,6 +58,7 @@ import com.biglybt.core.dht.router.DHTRouter;
 import com.biglybt.core.dht.router.DHTRouterContact;
 import com.biglybt.core.dht.router.DHTRouterStats;
 import com.biglybt.core.dht.transport.DHTTransportContact;
+import com.biglybt.core.dht.transport.DHTTransportReplyHandlerAdapter;
 import com.biglybt.core.dht.transport.DHTTransportValue;
 import com.biglybt.core.util.CopyOnWriteList;
 import com.biglybt.plugin.dht.impl.DHTPluginStorageManager;
@@ -431,6 +432,51 @@ DHTI2P
 		}else{
 		
 			transport.sendPing( destination, port );
+		}
+	}
+	
+	@Override
+	public void
+	pingAll(
+		boolean			az )
+	{
+    	DHTRouter router = dht.getRouter();
+    	
+		List<DHTRouterContact> r_contacts = router.getAllContacts();
+
+       	Iterator<DHTRouterContact>	rc_it = r_contacts.iterator();
+       	
+		while( rc_it.hasNext()){
+			
+			DHTRouterContact r_contact = rc_it.next();
+
+   			if ( router.isID( r_contact.getID())){
+   				
+   				continue;
+   			}
+
+			DHTTransportContactI2P t_cn = (DHTTransportContactI2P)((DHTControlContact)r_contact.getAttachment()).getTransportContact();
+			
+			if ( az ){
+				
+				if ( t_cn.getProtocolVersion() != DHTUtilsI2P.PROTOCOL_VERSION_NON_VUZE ){
+			
+					az_dht.ping( t_cn );
+				}
+			}else{
+				
+				transport.sendPing(
+					new DHTTransportReplyHandlerAdapter(){
+						
+						@Override
+						public void pingReply(DHTTransportContact contact){
+						}
+						@Override
+						public void failed(DHTTransportContact contact, Throwable error){
+						}
+					},
+					t_cn );
+			}
 		}
 	}
 	
@@ -1218,6 +1264,8 @@ DHTI2P
 		
 		dht.destroy();
 		
+		az_dht.destroy();
+		
 		transport.destroy();
 	}
 	
@@ -1261,7 +1309,7 @@ DHTI2P
 					
 		}else{
 		
-			return( adapter.getMessageText( "azi2phelper.status.node.est", String.valueOf( size ) + "/" + az_dht.getDHT().getControl().getStats().getEstimatedDHTSize()));
+			return( adapter.getMessageText( "azi2phelper.status.node.est", String.valueOf( size ) + "/" + az_dht.getEstimatedDHTSize() + "/" + az_dht.getBGDHT().getEstimatedDHTSize()));
 		}
 	}
 	

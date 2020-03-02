@@ -2524,6 +2524,15 @@ I2PHelperPlugin
 					
 					dht.ping( dest, port, cmd.startsWith( "az" ));
 				
+				}else if ( cmd.equals( "ping_all_dest" ) || cmd.equals( "az_ping_all_dest" )){
+					
+					if ( bits.length != 1 ){
+					
+						throw( new Exception( "usage: [az_]ping_all_dest"));
+					}
+					
+					dht.pingAll( cmd.startsWith( "az" ));
+				
 				}else if ( cmd.equals( "az_find_node" )){
 
 					if ( bits.length != 4 ){

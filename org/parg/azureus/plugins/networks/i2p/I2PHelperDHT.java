@@ -64,6 +64,10 @@ I2PHelperDHT
 		NodeInfo	ni );
 	
 	public void
+	pingAll(
+		boolean			az );
+	
+	public void
 	ping(
 		Destination		destination,
 		int				port,
