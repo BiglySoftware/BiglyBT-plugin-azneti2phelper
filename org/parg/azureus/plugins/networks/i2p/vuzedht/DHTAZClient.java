@@ -113,7 +113,7 @@ DHTAZClient
 												
 						Destination my_dest = sm_holder.getMyDestination();
 						
-						NID dht_nid = NodeInfo.generateNID( my_dest.calculateHash(), dht_port, I2PAppContext.getGlobalContext().random());
+						NID dht_nid = NodeInfo.generateNID( my_dest.calculateHash(), dht_port, inst.getRouter().getContext().random());
 		
 						NodeInfo my_node= new NodeInfo( dht_nid, my_dest, dht_port );
 		

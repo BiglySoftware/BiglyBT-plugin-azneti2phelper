@@ -31,6 +31,7 @@ import java.net.NoRouteToHostException;
 import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.URLDecoder;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SocketChannel;
@@ -108,8 +109,6 @@ I2PHelperSocksProxy
 	private boolean				allow_public_fallback;
 	private I2PHelperAdapter	adapter;
 	
-	private NamingService		name_service;
-	
 	private AESocksProxy 		proxy;
 	
 	private Map<String,Object[]>	intermediate_host_map	= new HashMap<String, Object[]>();
@@ -129,9 +128,7 @@ I2PHelperSocksProxy
 		router					= _router;
 		allow_public_fallback	= _allow_public_fallback;
 		adapter 				= _adapter;
-				
-		name_service = I2PAppContext.getGlobalContext().namingService();
-				
+								
 		proxy = AESocksProxyFactory.create( _port, 120*1000, 120*1000, this );
 		
 		adapter.log( "Intermediate SOCKS proxy started on port " + proxy.getPort());
@@ -155,7 +152,8 @@ I2PHelperSocksProxy
 	public String
 	getIntermediateHost(
 		String					host,
-		Map<String,Object>		opts )
+		Map<String,Object>		opts,
+		Map<String,Object>		output )
 		
 		throws AEProxyException
 	{
@@ -179,7 +177,7 @@ I2PHelperSocksProxy
 				
 				if ( !intermediate_host_map.containsKey( intermediate_host )){
 					
-					intermediate_host_map.put( intermediate_host, new Object[]{ host, opts });
+					intermediate_host_map.put( intermediate_host, new Object[]{ host, opts, output });
 					
 					return( intermediate_host );
 				}
@@ -289,76 +287,12 @@ I2PHelperSocksProxy
 		
 		throws Exception
 	{
-		// System.out.println( "connectTo: " + address + ": " + port );
-		
-		if ( address.length() < 400 ){
-			
-			if ( !address.endsWith( ".i2p" )){
-			
-				address += ".i2p";
-			}
-		}
-		
 		boolean	logit = true;
 
 		try{
-			Destination remote_dest;
-			
-			if ( name_service != null ){
-			
-				remote_dest = name_service.lookup( address );
-				
-			}else{
-				
-				remote_dest = new Destination();
-	       
-				try{
-					remote_dest.fromBase64( address );
-					
-				}catch( Throwable e ){
-					
-					remote_dest = null;
-				}
-			}
-			
 			I2PSMHolder sm_holder = getSocketManager( options );
 
-			if ( remote_dest == null ){
-				
-				if ( address.endsWith( ".b32.i2p" )){
-					
-					remote_dest = sm_holder.lookupDest( address, 30*1000 );
-					
-				}else{
-					
-					String address_str = adapter.lookup( address );
-				
-					if ( address_str != null ){
-						
-						if ( address_str.length() < 400 ){
-							
-							remote_dest = sm_holder.lookupDest( address_str, 30*1000 );
-							
-						}else{
-							
-							remote_dest = new Destination();
-						       
-							try{
-								remote_dest.fromBase64( address_str );
-								
-							}catch( Throwable e ){
-								
-								remote_dest = null;
-							}
-						}
-					}
-				}
-			}
-			
-			if ( remote_dest == null ){
-				
-				throw( new Exception( "Failed to resolve address '" + address + "'" ));
-			}
+			Destination remote_dest = sm_holder.lookupAddress( address, adapter );
 			
 			if ( remote_dest.getHash().equals( sm_holder.getMyDestination().getHash())){
 				
@@ -383,6 +317,10 @@ I2PHelperSocksProxy
 			adapter.outgoingConnection( socket );
 			
 			return( socket );
+			
+		}catch( UnknownHostException e ){
+			
+			throw( e );
 			
 		}catch( Throwable e ){
 			
@@ -487,6 +425,7 @@ I2PHelperSocksProxy
 		
 		private AESocksProxyConnection		proxy_connection;
 		private Map<String,Object>			options;
+		private Map<String,Object>			output;
 		
 		private String						original_unresolved;
 		private int							original_port;
@@ -532,7 +471,7 @@ I2PHelperSocksProxy
 		{
 			InetAddress resolved 	= _address.getAddress();
 			String		unresolved	= _address.getUnresolvedAddress();
-						
+							
 			if ( resolved != null ){
 				
 				synchronized( this ){
@@ -544,6 +483,7 @@ I2PHelperSocksProxy
 						resolved	= null;
 						unresolved	= (String)intermediate[0];
 						options		= (Map<String,Object>)intermediate[1];
+						output		= (Map<String,Object>)intermediate[2];
 					}
 				}
 			}
@@ -629,8 +569,13 @@ I2PHelperSocksProxy
 								       	
 								        proxy_connection.connected();
 								        
-								        
+								        if ( output != null ){
+								        	
+								        	output.put( "connected", true );
+								        }
 									}catch( Throwable e ){
+
+										setError( e );
 										
 										try{
 											proxy_connection.close();
@@ -674,6 +619,17 @@ I2PHelperSocksProxy
 			}
 		}
 		*/
+		
+		private void
+		setError(
+			Throwable	e )
+		{
+			
+			if ( output != null ){
+				
+				output.put( "error", e );
+			}
+		}
 		
 		@Override
 		public void
@@ -898,6 +854,8 @@ I2PHelperSocksProxy
 											return;
 										}
 									}catch( Throwable e ){
+										
+										setError( e );
 										
 										boolean ignore = false;
 										
@@ -1373,6 +1331,8 @@ I2PHelperSocksProxy
 										connection.requestReadSelect( source_channel );								
 
 									}catch( Throwable e ){
+										
+										setError( e );
 										
 										connection.failed( e );
 									}

@@ -212,7 +212,7 @@ I2PHelperRouterDHT
 			        boolean[]	use_existing_key = { dest_key_file.exists() && !force_new_address };
 			        
 			        sm_holder = 
-						new I2PSMHolder()
+						new I2PSMHolder( router )
 						{
 							@Override
 							protected I2PSocketManager 
@@ -429,9 +429,8 @@ I2PHelperRouterDHT
 							throw( new Exception( "Router destroyed" ));
 						}
 						
-						I2PAppContext ctx = I2PAppContext.getGlobalContext();
-			
-						
+						I2PAppContext ctx = router.getContext();
+												
 						int		dht_port;
 						NID		dht_nid;
 						

@@ -730,20 +730,19 @@ I2PHelperRouter
 				router_props.put( "stat.full", "true" );
 			}
 			
-			I2PAppContext ctx = I2PAppContext.getGlobalContext();
-
-			ctx.logManager().setDefaultLimit( "ERROR" ); // "WARN" );
-
 			router = new Router( router_props );
 				
 			router.setKillVMOnEnd( false );
+					
+			RouterContext router_ctx = router.getContext();
+			
+			router_ctx.logManager().setDefaultLimit( "ERROR" ); // "WARN" );
+
+				// have to defer this to here as loading NativeBigInteger causes the global app context to be set to a non-router one...
+			
+			plugin.setModPowLimiter();
 			
 			router.runRouter();
-				
-			// not needed since 0.9.13 as setting moved to Router constructor
-			// router.setKillVMOnEnd( false );	// has to be done again after run phase as set true in that code :(
-
-			RouterContext router_ctx = router.getContext();
 			
 			long start = SystemTime.getMonotonousTime();
 			
@@ -1068,6 +1067,19 @@ I2PHelperRouter
 	getRouter()
 	{
 		return( router );
+	}
+	
+	public I2PAppContext
+	getContext()
+	{
+		Router	r = router;
+		
+		if ( r != null ){
+			
+			return( r.getContext());
+		}
+		
+		return( I2PAppContext.getGlobalContext());
 	}
 	
 	public ServerInstance 
@@ -1437,7 +1449,7 @@ I2PHelperRouter
 				File dest_key_file 	= new File( config_dir,  server_id + "_dest_key.dat" );
          	
 				sm_holder = 
-					new I2PSMHolder()
+					new I2PSMHolder( I2PHelperRouter.this )
 					{
 						@Override
 						protected I2PSocketManager 
@@ -1620,6 +1632,12 @@ I2PHelperRouter
 			}			
 		}
 		
+		public I2PHelperRouter
+		getRouter()
+		{
+			return( I2PHelperRouter.this );
+		}
+		
 		public I2PSMHolder
 		getSMHolder()
 		{
@@ -1634,48 +1652,8 @@ I2PHelperRouter
 			
 			throws Exception
 		{
-			if ( address.length() < 400 ){
-				
-				if ( !address.endsWith( ".i2p" )){
-				
-					address += ".i2p";
-				}
-			}
+			Destination remote_dest = sm_holder.lookupAddress( address, adapter );
 			
-			Destination remote_dest;
-			
-			NamingService name_service = I2PAppContext.getGlobalContext().namingService();
-			
-			if ( name_service != null ){
-			
-				remote_dest = name_service.lookup( address );
-				
-			}else{
-				
-				remote_dest = new Destination();
-	       
-				try{
-					remote_dest.fromBase64( address );
-					
-				}catch( Throwable e ){
-					
-					remote_dest = null;
-				}
-			}
-			
-			if ( remote_dest == null ){
-				
-				if ( address.endsWith( ".b32.i2p" )){
-					
-					remote_dest = sm_holder.lookupDest( address, 30*1000 );
-				}
-			}
-			
-			if ( remote_dest == null ){
-				
-				throw( new Exception( "Failed to resolve address '" + address + "'" ));
-			}
-						
 			Properties overrides = new Properties();
 			
 			overrides.setProperty( "i2p.streaming.connectDelay", "250" );

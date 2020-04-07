@@ -54,6 +54,7 @@ I2PHelperHostnameService
 	
 	private I2PHelperPlugin		plugin;
 	private File				i2hostetag_file;
+	private File				dnsfeed_base_file;
 	private File				dnsfeed_file;
 	
 	private Map<String,String>	result_cache = new HashMap<String, String>();
@@ -67,6 +68,7 @@ I2PHelperHostnameService
 	{
 		plugin				= _plugin;
 		i2hostetag_file 	= new File( plugin_dir, "i2hostetag.b32.txt" );
+		dnsfeed_base_file	= new File( plugin_dir, "dnsfeed_base.txt" );
 		dnsfeed_file	 	= new File( plugin_dir, "dnsfeed.txt" );
 		
 		SimpleTimer.addEvent(
@@ -166,9 +168,56 @@ I2PHelperHostnameService
 				
 				dnsfeed_cache = new HashMap<>();
 				
+				if ( dnsfeed_base_file.exists()){
+					
+					try{
+						LineNumberReader	lnr = new LineNumberReader( new FileReader( dnsfeed_base_file ));
+						
+						try{
+							while( true ){
+								
+								String line = lnr.readLine();
+								
+								if ( line == null ){
+									
+									break;
+								}
+																
+								line = line.trim();
+								
+								if ( line.startsWith( "#" )){
+									
+									continue;
+								}
+								
+								String[] bits = line.split( "=", 2 );
+								
+								if ( bits.length == 2 ){
+									
+									String host = bits[0];
+									String dest	= bits[1];
+									
+									dnsfeed_cache.put( host,  dest );
+								}
+							}
+						}catch( Throwable e ){
+							
+							Debug.out( e );
+							
+						}finally{
+							
+							lnr.close();
+						}
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+				
 				if ( dnsfeed_file.exists()){				
 
-					Set<Integer>	dup_lines = new HashSet<>();
+					Set<String>		dup_set		= new HashSet<>();
+					Set<Integer>	dup_lines 	= new HashSet<>();
 					
 					try{
 						int	line_number = 0;
@@ -201,11 +250,15 @@ I2PHelperHostnameService
 									String host = bits[0];
 									String dest	= bits[1];
 									
-									String existing = dnsfeed_cache.put( host,  dest );
-										
-									if ( existing != null && existing.equals( dest )){
-										
+									dnsfeed_cache.put( host,  dest );
+									
+									if ( dup_set.contains( line )){
+											
 										dup_lines.add( line_number );
+										
+									}else{
+										
+										dup_set.add( line );
 									}
 								}
 							}

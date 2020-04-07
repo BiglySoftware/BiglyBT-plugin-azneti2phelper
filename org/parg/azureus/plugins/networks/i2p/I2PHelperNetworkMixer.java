@@ -479,29 +479,32 @@ I2PHelperNetworkMixer
 													seed_request_read_key,
 													options );
 		
-										chat.setSharedNickname( false );
-										
-										chat.addListener(
-											new ChatAdapter()
-											{
-												@Override
-												public void 
-												messageReceived(
-													ChatMessage 	msg,
-													boolean			sort_outstanding )
-												{
-													receiveIncomingSeedRequest( msg );
-												}
-											});
-										
-										List<ChatMessage>	messages = chat.getMessages();
-										
-										for ( ChatMessage msg: messages ){
+										if ( chat != null ){
 											
-											receiveIncomingSeedRequest( msg );
+											chat.setSharedNickname( false );
+											
+											chat.addListener(
+												new ChatAdapter()
+												{
+													@Override
+													public void 
+													messageReceived(
+														ChatMessage 	msg,
+														boolean			sort_outstanding )
+													{
+														receiveIncomingSeedRequest( msg );
+													}
+												});
+											
+											List<ChatMessage>	messages = chat.getMessages();
+											
+											for ( ChatMessage msg: messages ){
+												
+												receiveIncomingSeedRequest( msg );
+											}
+											
+											seed_request_read_chat = chat;
 										}
-										
-										seed_request_read_chat = chat;
 										
 									}catch( Throwable e ){
 										

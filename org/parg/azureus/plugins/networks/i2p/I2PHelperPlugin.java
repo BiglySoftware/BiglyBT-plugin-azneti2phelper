@@ -515,9 +515,7 @@ I2PHelperPlugin
 	private I2PHelperSocketForwarder	socket_forwarder = new I2PHelperSocketForwarder();
 	
 	private static final int CPU_THROTTLE_DEFAULT	= 2;
-	
-	private int cpu_throttle_factor;
-	
+		
 	private volatile boolean	unloaded;
 	
 	@Override
@@ -558,131 +556,9 @@ I2PHelperPlugin
 
 			// Need these set before NativeBigInteger, as it loads up some native
 			// libraries into the current directory otherwise
+			
 			System.setProperty( "i2p.dir.config", plugin_dir.getAbsolutePath());
 			System.setProperty( "i2p.dir.base", plugin_dir.getAbsolutePath());
-
-			NativeBigInteger.setModPowLimiter(
-					new NativeBigInteger.ModPowLimiter()
-					{
-						private final int num_processors = Math.max( 1, Runtime.getRuntime().availableProcessors());
-						
-						private final int ms_total = 1000*num_processors;
-						
-						private long	start_time;
-						private int		last_tf;
-						
-						private long	call_time;
-						private long	call_count;
-						
-						private long	current_sleep = -1;
-						private long	last_logged_sleep;
-						
-						@Override
-						public void 
-						handleCall(
-							long 	start,
-							long	end )
-						{
-							synchronized( this ){
-								
-								if ( cpu_throttle_factor != last_tf ){
-									
-									call_time			= 0;
-									call_count			= 0;
-									current_sleep		= -1;
-									last_logged_sleep 	= 0;
-									
-									last_tf = cpu_throttle_factor;
-								}
-								
-								if ( last_tf <= 0 ){
-									
-									return;
-									
-								}
-								
-								call_count++;
-								
-								if ( call_count == 1 ){
-									
-									start_time = SystemTime.getMonotonousTime();
-								}
-								
-								call_time	+= end - start;
-																
-								long	sleep;
-								
-								if ( current_sleep == -1 || call_count == 1000 ){
-																
-									long average = (call_time/call_count)/1000000;
-									
-									if ( average == 0 ){
-										
-										average = 1;
-									}
-									
-									int ms_avail = ms_total/last_tf;	// allowable cpu
-
-									long calls_per_sec = ms_avail/average;
-									
-									int SLEEP_MAX = 100;
-									
-									if ( calls_per_sec == 0 ){
-									
-										sleep = SLEEP_MAX;
-										
-									}else{
-										
-										sleep = 1000/calls_per_sec;
-									}
-									
-									if ( sleep <= 0 ){
-										
-										sleep = 1;
-										
-									}else if ( sleep > SLEEP_MAX ){
-										
-										sleep = SLEEP_MAX;
-									}
-									
-									if ( call_count == 1000 ){
-										
-										long	elapsed_sec = (SystemTime.getMonotonousTime() - start_time)/1000;
-										
-										if ( elapsed_sec == 0 ){
-											
-											elapsed_sec = 1;
-										}
-										
-										long call_per_sec = call_count /elapsed_sec;
-										
-										call_time 	= 0;
-										call_count	= 0;
-										
-										current_sleep = sleep;
-										
-										if ( sleep != last_logged_sleep ){
-										
-											last_logged_sleep = sleep;
-											
-											log( "CPU throttle: factor=" + cpu_throttle_factor + "+" + call_per_sec + "/s -> " + sleep + "ms" );
-										}
-									}
-								}else{
-									
-									sleep = current_sleep;
-								}
-																														
-								try{
-									Thread.sleep( sleep );
-									
-								}catch( Throwable e ){
-									
-								}
-							}
-						}
-					});
-				
 			
 			final UIManager	ui_manager = plugin_interface.getUIManager();
 
@@ -1720,6 +1596,146 @@ I2PHelperPlugin
 		}
 	}
 	
+	private int 		cpu_throttle_factor;
+	private boolean		cpu_throttle_init_done;
+	
+	public void
+	setModPowLimiter()
+	{
+		synchronized( this ){
+			
+			if ( cpu_throttle_init_done ){
+				
+				return;
+			}
+			
+			cpu_throttle_init_done = true;
+		}
+		
+		NativeBigInteger.setModPowLimiter(
+				new NativeBigInteger.ModPowLimiter()
+				{
+					private final int num_processors = Math.max( 1, Runtime.getRuntime().availableProcessors());
+					
+					private final int ms_total = 1000*num_processors;
+					
+					private long	start_time;
+					private int		last_tf;
+					
+					private long	call_time;
+					private long	call_count;
+					
+					private long	current_sleep = -1;
+					private long	last_logged_sleep;
+					
+					@Override
+					public void 
+					handleCall(
+						long 	start,
+						long	end )
+					{
+						synchronized( this ){
+							
+							if ( cpu_throttle_factor != last_tf ){
+								
+								call_time			= 0;
+								call_count			= 0;
+								current_sleep		= -1;
+								last_logged_sleep 	= 0;
+								
+								last_tf = cpu_throttle_factor;
+							}
+							
+							if ( last_tf <= 0 ){
+								
+								return;
+								
+							}
+							
+							call_count++;
+							
+							if ( call_count == 1 ){
+								
+								start_time = SystemTime.getMonotonousTime();
+							}
+							
+							call_time	+= end - start;
+															
+							long	sleep;
+							
+							if ( current_sleep == -1 || call_count == 1000 ){
+															
+								long average = (call_time/call_count)/1000000;
+								
+								if ( average == 0 ){
+									
+									average = 1;
+								}
+								
+								int ms_avail = ms_total/last_tf;	// allowable cpu
+
+								long calls_per_sec = ms_avail/average;
+								
+								int SLEEP_MAX = 100;
+								
+								if ( calls_per_sec == 0 ){
+								
+									sleep = SLEEP_MAX;
+									
+								}else{
+									
+									sleep = 1000/calls_per_sec;
+								}
+								
+								if ( sleep <= 0 ){
+									
+									sleep = 1;
+									
+								}else if ( sleep > SLEEP_MAX ){
+									
+									sleep = SLEEP_MAX;
+								}
+								
+								if ( call_count == 1000 ){
+									
+									long	elapsed_sec = (SystemTime.getMonotonousTime() - start_time)/1000;
+									
+									if ( elapsed_sec == 0 ){
+										
+										elapsed_sec = 1;
+									}
+									
+									long call_per_sec = call_count /elapsed_sec;
+									
+									call_time 	= 0;
+									call_count	= 0;
+									
+									current_sleep = sleep;
+									
+									if ( sleep != last_logged_sleep ){
+									
+										last_logged_sleep = sleep;
+										
+										log( "CPU throttle: factor=" + cpu_throttle_factor + "+" + call_per_sec + "/s -> " + sleep + "ms" );
+									}
+								}
+							}else{
+								
+								sleep = current_sleep;
+							}
+																													
+							try{
+								Thread.sleep( sleep );
+								
+							}catch( Throwable e ){
+								
+							}
+						}
+					}
+				});
+			
+	}
+	
 	private void
 	torPluginInstalled(
 		PluginInterface tor_plugin_pi )
@@ -1993,11 +2009,14 @@ I2PHelperPlugin
 			
 			I2PHelperRouter	r = router;
 
-			I2PHelperRouterDHT dht = r.selectSecondaryDHT( dht_index );
-			
-			if ( dht != null ){
-						
-				return( InetSocketAddress.createUnresolved( dht.getB32Address(), 6881 ));
+			if ( r != null ){
+				
+				I2PHelperRouterDHT dht = r.selectSecondaryDHT( dht_index );
+				
+				if ( dht != null ){
+							
+					return( InetSocketAddress.createUnresolved( dht.getB32Address(), 6881 ));
+				}
 			}
 		}
 		
@@ -3708,317 +3727,6 @@ I2PHelperPlugin
 		return( null );
 	}
 	
-//	private byte[] 
-//	handleMaggotRequest(
-//		final MagnetURIHandlerProgressListener	progress,
-//		final byte[]							hash,
-//		final String							args,
-//		final long								timeout )
-//		
-//		throws MagnetURIHandlerException
-//	{
-//		String[]	bits = args.split( "&" );
-//		
-//		String sha1 = null;
-//		
-//		for ( String bit: bits ){
-//			
-//			String[] temp = bit.trim().split( "=" );
-//			
-//			if ( temp[0].equals( "maggot_sha1" )){
-//				
-//				sha1 = temp[1];
-//				
-//				break;
-//			}
-//		}
-//		
-//		final String	sha1_hash 	= sha1;
-//		final String	info_hash	= ByteFormatter.encodeString( hash );
-//		
-//		final byte[][]	result = { null };
-//		
-//		final AESemaphore	wait_sem = new AESemaphore( "maggot:wait" );
-//		
-//		new AEThread2( "maggotLookup" )
-//		{
-//			private int		active_gets;
-//			private boolean	complete;
-//			
-//			private List<String>	pending_gets = new ArrayList<String>();
-//			
-//			@Override
-//			public void
-//			run()
-//			{
-//				try{
-//					long	start = SystemTime.getMonotonousTime();
-//					
-//					I2PHelperTracker t = getTracker( timeout );
-//					
-//					long	remaining = timeout - ( SystemTime.getMonotonousTime() - start );
-//
-//					if ( t == null || remaining < 5*1000 ){
-//						
-//						throw( new Exception( "Timeout waiting for tracker" ));
-//					}
-//										
-//					t.get( 
-//						hash,
-//						"Maggot lookup",
-//						(byte)0,
-//						16,
-//						remaining,
-//						new I2PHelperDHTListener()
-//						{
-//							@Override
-//							public void
-//							searching(
-//								String host ) 
-//							{
-//								progress.reportActivity( "I2P: Searching " + host );
-//							}
-//							
-//							@Override
-//							public void 
-//							valueRead(
-//								DHTTransportContactI2P		contact,
-//								String 						host,
-//								int							contact_state )
-//							{
-//								if ( progress.cancelled()){
-//									
-//									return;
-//								}
-//	
-//									// remember the contact version is that of the node frmo which the reply was received,
-//									// NOT the host value returned....
-//								
-//								progress.reportActivity( "I2P: Found " + host );
-//								
-//								synchronized( result ){
-//									
-//									if ( result[0] != null ){
-//										
-//										return;
-//									}
-//									
-//									pending_gets.add( host );
-//
-//									if ( active_gets > 5 ){										
-//										
-//										return;
-//										
-//									}else{
-//										
-//										new AEThread2( "maggotLookup:get" )
-//										{
-//											@Override
-//											public void
-//											run()
-//											{
-//												while( !progress.cancelled()){
-//													
-//													String host;
-//													
-//													synchronized( result ){
-//														
-//														if ( result[0] != null || pending_gets.isEmpty()){
-//															
-//															active_gets--;
-//															
-//															if ( active_gets == 0 && complete ){
-//																
-//																wait_sem.release();
-//															}
-//															
-//															break;
-//														}
-//														
-//														host = pending_gets.remove(0);
-//													}
-//													
-//													try{
-//								        				
-//								        					// if we ever re-enable this then we'd need to think which DHT we used for maggot
-//								        					// lookups...
-//								        				
-//								        				if ( true ){
-//								        					
-//								        					throw( new Exception( "derp" ));
-//								        				}
-//								        				
-//								        				/*
-//								        				 
-//								        				Destination dest = I2PAppContext.getGlobalContext().namingService().lookup( host );
-//
-//								        				I2PSocketManager socket_manager = router.selectDHT().getDHTSocketManager();
-//
-//								        				I2PSocketOptions opts = socket_manager.buildOptions();
-//								        				
-//								        				opts.setPort( 80 );
-//								        				
-//								        				opts.setConnectTimeout( 30*1000 );
-//								        				
-//								        				opts.setReadTimeout( 30*1000 );
-//								        				
-//								        				I2PSocket socket = socket_manager.connect( dest, opts );
-//								        				
-//								        				try{
-//									        				OutputStream os = socket.getOutputStream();
-//									        											
-//									        				os.write(( "GET /" + info_hash + ":" + sha1_hash + " HTTP/1.1\r\n\r\n" ).getBytes( "ISO8859-1" ));
-//									        				
-//									        				os.flush();
-//									        				
-//									        				InputStream is = socket.getInputStream();
-//									        				
-//									        				ByteArrayOutputStream baos = new ByteArrayOutputStream( 64*1024 );
-//									        				
-//									        				while( true ){
-//									        					
-//									        					if ( progress.cancelled()){
-//									        						
-//									        						throw( new Exception( "Cancelled" ));
-//									        					}
-//									        					
-//									        					byte[]	buffer = new byte[65536];
-//									        					
-//									        					int	len = is.read( buffer );
-//									        					
-//									        					if ( len <= 0 ){
-//									        						
-//									        						break;
-//									        					}
-//									        					
-//									        					if ( baos.size() > 5*1024*1024 ){
-//									        						
-//									        						throw( new Exception( "Data too large" ));
-//									        					}
-//									        					
-//									        					baos.write( buffer, 0, len );
-//									        				}
-//									        				
-//									        				byte[] response_bytes = baos.toByteArray();
-//									        													        					
-//									        				for ( int i=4;i<response_bytes.length;i++){
-//									        					
-//									        					if ( 	response_bytes[i-4] == '\r' && 
-//									        							response_bytes[i-3] == '\n' &&
-//									       								response_bytes[i-2] == '\r' &&
-//									       								response_bytes[i-1] == '\n' ){
-//									        							
-//									        						byte[] torrent_bytes = new byte[response_bytes.length-i];
-//									        						
-//									        						System.arraycopy( response_bytes, i, torrent_bytes, 0, torrent_bytes.length );
-//									        						
-//											        				TOTorrent torrent = TOTorrentFactory.deserialiseFromBEncodedByteArray( torrent_bytes );
-//											        				
-//											        				if ( torrent != null && Arrays.equals( torrent.getHash(), hash )){
-//											        					
-//											        					try{
-//										        							TorrentUtils.setNetworkCache( torrent, Arrays.asList( AENetworkClassifier.AT_I2P ));
-//											        						
-//											        					}catch( Throwable e ){
-//											        					}
-//											        					
-//											        					synchronized( result ){
-//											        					
-//											        						if ( result[0] == null ){
-//											        							
-//											        							result[0] = torrent_bytes;
-//											        							
-//											        							wait_sem.release();
-//											        						}
-//											        					}
-//											        				}
-//											        				
-//											        				break;
-//									        					}
-//									        				}
-//								        				}finally{
-//								        				
-//								        					try{
-//								        						socket.getOutputStream().close();
-//								        						
-//								        					}catch( Throwable e ){
-//								        					}
-//								        					
-//								        					try{
-//								        						socket.getInputStream().close();
-//								        						
-//								        					}catch( Throwable e ){
-//								        					}
-//								        					
-//								        					socket.close();
-//								        				}
-//								        				*/
-//													}catch( Throwable e ){
-//														
-//													}
-//												}
-//											}
-//										}.start();
-//										
-//										active_gets++;
-//									}
-//								}
-//							}
-//							
-//							@Override
-//							public void
-//							complete(
-//								boolean timeout ) 
-//							{
-//								synchronized( result ){
-//									
-//									complete = true;
-//									
-//									if ( active_gets == 0 ){
-//									
-//										wait_sem.release();
-//									}
-//								}
-//							}
-//						});
-//					
-//				}catch( Throwable e ){
-//					
-//					wait_sem.release();
-//				}
-//			}
-//		}.start();
-//		
-//		while( true ){
-//			
-//			if ( wait_sem.reserve(1000)){
-//			
-//				break;
-//				
-//			}else{
-//				
-//				if ( progress.cancelled()){
-//					
-//					break;
-//				}
-//			}
-//		}
-//		
-//		boolean	worked = false;
-//		
-//		try{
-//			synchronized( result ){
-//			
-//				worked = result[0] != null;
-//				
-//				return( result[0] );
-//			}
-//		}finally{
-//			
-//			progress.reportActivity( "Maggot lookup " + (worked?"succeeded":"failed" ));
-//		}
-//	}
-	
 	private AtomicInteger	active_maggot_requests 	= new AtomicInteger();
 	private BloomFilter		maggot_bloom			= null;
 	private long			maggot_bloom_create_time;
@@ -4379,11 +4087,13 @@ I2PHelperPlugin
 			try{
 				int intermediate_port = socks_proxy.getPort();
 				
-				String intermediate_host = socks_proxy.getIntermediateHost( host, proxy_options );
+				Map<String,Object>	output = new HashMap<>();
+				
+				String intermediate_host = socks_proxy.getIntermediateHost( host, proxy_options, output );
 		
 				Proxy proxy = new Proxy( Proxy.Type.SOCKS, new InetSocketAddress( "127.0.0.1", intermediate_port ));	
 								
-				proxy_map.put( proxy, new ProxyMapEntry( host, intermediate_host ));
+				proxy_map.put( proxy, new ProxyMapEntry( host, intermediate_host, output ));
 		
 				//System.out.println( "proxy_map=" + proxy_map.size());
 				
@@ -4450,11 +4160,13 @@ I2PHelperPlugin
 			try{
 				int intermediate_port = socks_proxy.getPort();
 				
-				String intermediate_host = socks_proxy.getIntermediateHost( host, proxy_options );
+				Map<String,Object>	output = new HashMap<>();
+
+				String intermediate_host = socks_proxy.getIntermediateHost( host, proxy_options, output );
 		
 				Proxy proxy = new Proxy( Proxy.Type.SOCKS, new InetSocketAddress( "127.0.0.1", intermediate_port ));	
 								
-				proxy_map.put( proxy, new ProxyMapEntry( host, intermediate_host ));
+				proxy_map.put( proxy, new ProxyMapEntry( host, intermediate_host, output ));
 		
 				//System.out.println( "proxy_map=" + proxy_map.size());
 	
@@ -4517,6 +4229,23 @@ I2PHelperPlugin
 				Debug.out( "Proxy entry missing!" );
 			}
 		}
+	}
+	
+	public Map<String,Object>
+	getProxyStatus(
+		Proxy		proxy )
+	{
+		synchronized( this ){
+			
+			ProxyMapEntry entry = proxy_map.get( proxy );
+		
+			if ( entry != null ){
+				
+				return( entry.output );
+			}
+		}
+		
+		return( null );
 	}
 	
 	public Map<String,Object>
@@ -5449,29 +5178,20 @@ I2PHelperPlugin
 	{
 		private long	created = SystemTime.getMonotonousTime();
 		
-		private	String	host;
-		private String	intermediate_host;
-		
+		private	String				host;
+		private String				intermediate_host;
+		private Map<String,Object>	output;
+
 		private
 		ProxyMapEntry(
-			String		_host,
-			String		_intermediate_host )
+			String				_host,
+			String				_intermediate_host,
+			Map<String,Object>	_output )
 		{
 			host				= _host;
 			intermediate_host	= _intermediate_host;
+			output				= _output;
 		}
-		
-//		private long
-//		getCreateTime()
-//		{
-//			return( created );
-//		}
-//		
-//		private String
-//		getHost()
-//		{
-//			return( host );
-//		}
 		
 		private String
 		getIntermediateHost()

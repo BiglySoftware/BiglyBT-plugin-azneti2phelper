@@ -19,16 +19,21 @@
 package org.parg.azureus.plugins.networks.i2p.router;
 
 import java.io.File;
+import java.net.UnknownHostException;
 import java.util.*;
+
+import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 
 import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.TimerEventPeriodic;
 
+import net.i2p.I2PAppContext;
 import net.i2p.client.I2PSession;
 import net.i2p.client.I2PSessionMuxedListener;
 import net.i2p.client.SendMessageOptions;
 import net.i2p.client.datagram.I2PDatagramMaker;
+import net.i2p.client.naming.NamingService;
 import net.i2p.client.streaming.I2PServerSocket;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketManager;
@@ -56,6 +61,8 @@ I2PSMHolder
 	logMessage(
 		String		str );
 	
+	private final I2PHelperRouter			router;
+	
 	private volatile I2PSocketManager		socket_manager;
 	private volatile I2PSession				session;
 	
@@ -71,10 +78,13 @@ I2PSMHolder
 	private volatile boolean	destroyed;
 	
 	public 
-	I2PSMHolder()
+	I2PSMHolder(
+		I2PHelperRouter		_router )
 	
 		throws Exception
 	{
+		router	= _router;
+		
 		socket_manager = createSocketManager( false );
 			
 		if ( socket_manager == null ){
@@ -251,6 +261,102 @@ I2PSMHolder
 		checkSession();
 
 		return( session.lookupDest( address, timeout ));
+	}
+	
+	public Destination
+	lookupAddress(
+		String				address,
+		I2PHelperAdapter	adapter )
+	
+		throws UnknownHostException
+	{
+		Destination remote_dest = null;
+
+		try{
+			if ( address.length() < 400 ){
+				
+				if ( !address.endsWith( ".i2p" )){
+				
+					address += ".i2p";
+				}
+			}
+						
+			I2PAppContext ctx = router.getContext();
+			
+			NamingService name_service = ctx.namingService();
+	
+			if ( name_service != null ){
+			
+				remote_dest = name_service.lookup( address );
+				
+			}else{
+				
+				remote_dest = new Destination();
+	       
+				try{
+					remote_dest.fromBase64( address );
+					
+				}catch( Throwable e ){
+					
+					remote_dest = null;
+				}
+			}
+				
+			if ( remote_dest == null ){
+				
+				if ( address.endsWith( ".b32.i2p" )){
+					
+					remote_dest = lookupDest( address, 30*1000 );
+					
+				}else{
+					
+					String address_str = adapter.lookup( address );
+				
+					if ( address_str != null ){
+						
+						if ( address_str.length() < 400 ){
+							
+							remote_dest = lookupDest( address_str, 30*1000 );
+							
+						}else{
+							
+							remote_dest = new Destination();
+						       
+							try{
+								remote_dest.fromBase64( address_str );
+								
+							}catch( Throwable e ){
+								
+								remote_dest = null;
+							}
+						}
+					}
+					
+					if ( remote_dest == null ){
+						
+							// only makes sense to lookup non-b32 host names via lookupDest when router not running
+							// in this JVM (otherwise ctx.namingService().lookup will already have done this job)
+						
+						if ( !ctx.isRouterContext()){
+						
+							remote_dest = lookupDest( address, 30*1000 );
+						}
+					}
+				}
+			}
+		}catch( Throwable e ){
+			
+		}finally{
+				
+			//System.out.println( "lookupAddress( " + address + " ) -> " + remote_dest );
+		}
+		
+		if ( remote_dest != null ){
+			
+			return( remote_dest );
+		}
+		
+		throw( new UnknownHostException( address ));
 	}
 	
 	public I2PSocketOptions
