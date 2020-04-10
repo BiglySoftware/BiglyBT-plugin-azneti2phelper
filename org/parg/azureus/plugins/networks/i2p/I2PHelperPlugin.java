@@ -3400,6 +3400,11 @@ I2PHelperPlugin
 		String		host,
 		int			port )
 	{
+		if ( port <= 0 || port >= 65535 ){
+			
+			return;	// invalid according to NodeInfo
+		}
+		
 		Destination dest;
 		
 		synchronized( dest_map ){
