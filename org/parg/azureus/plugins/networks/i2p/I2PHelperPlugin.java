@@ -72,6 +72,7 @@ import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.AsyncDispatcher;
 import com.biglybt.core.util.BDecoder;
 import com.biglybt.core.util.ByteFormatter;
+import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.RandomUtils;
 import com.biglybt.core.util.SimpleTimer;
@@ -544,7 +545,7 @@ I2PHelperPlugin
 				
 			}else{
 				
-				throw( new PluginException( "Another instance of Vuze is running, can't initialize plugin" ));
+				throw( new PluginException( "Another instance of " + Constants.getAppName() + " appears to be running, can't create lock file '" + lock_file + "'"));
 			}
 			
 			readPluginInfo();
