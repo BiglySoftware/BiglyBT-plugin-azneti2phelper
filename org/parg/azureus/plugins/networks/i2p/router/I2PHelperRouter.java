@@ -37,7 +37,6 @@ import net.i2p.I2PAppContext;
 import net.i2p.client.I2PClient;
 import net.i2p.client.I2PClientFactory;
 import net.i2p.client.I2PSession;
-import net.i2p.client.naming.NamingService;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketManager;
 import net.i2p.client.streaming.I2PSocketManagerFactory;
@@ -546,6 +545,12 @@ I2PHelperRouter
 			opts.putAll( router_ctx.getProperties());
 		}
 				
+		File sm_config = new File( config_dir, "sm.config" );
+		
+		Properties sm_props = I2PHelperUtils.readProperties( sm_config );
+
+		opts.putAll( sm_props );
+		
         // outbound speed limit
         // "i2cp.outboundBytesPerSecond"
         // tell router -> 

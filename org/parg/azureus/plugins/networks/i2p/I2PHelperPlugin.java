@@ -4469,7 +4469,9 @@ I2PHelperPlugin
 								}
 							}
 							
-							I2PHelperAZDHT dht = pi.getDHT( 2*60*1000 );
+							Number timeout = (Number)server_options.get( "timeout" );
+							
+							I2PHelperAZDHT dht = pi.getDHT( timeout == null?2*60*1000:timeout.intValue());
 							
 							if ( dht == null ){
 								
