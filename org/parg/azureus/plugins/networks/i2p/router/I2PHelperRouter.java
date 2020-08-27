@@ -596,6 +596,9 @@ I2PHelperRouter
         if (opts.getProperty(I2PClient.PROP_SIGTYPE) == null)
         	opts.setProperty(I2PClient.PROP_SIGTYPE, "EdDSA_SHA512_Ed25519");
         
+        if (opts.getProperty("i2cp.leaseSetEncType") == null)
+            opts.setProperty("i2cp.leaseSetEncType", "4,0");
+        
         setupSMExplicitOpts( opts, Constants.APP_NAME, SM_TYPE_ROUTER );
 	}
 	
