@@ -25,7 +25,9 @@ import java.util.*;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 
 import com.biglybt.core.util.AEThread2;
+import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.SimpleTimer;
+import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.TimerEventPeriodic;
 
 import net.i2p.I2PAppContext;
@@ -247,8 +249,22 @@ I2PSMHolder
 		throws Exception
 	{
 		checkSession();
+			
+		long start = SystemTime.getMonotonousTime();
 		
-		return( session.lookupDest( address, timeout ));
+		boolean ok = false;
+		
+		try{
+			Destination result =  session.lookupDest( address, timeout );
+		
+			ok = result != null;
+			
+			return( result );
+			
+		}finally{
+			
+			//System.out.println( "Session: " + address + " - " + ok + " - " + ( SystemTime.getMonotonousTime() - start ));
+		}
 	}
 	
 	public Destination
@@ -260,7 +276,22 @@ I2PSMHolder
 	{
 		checkSession();
 
-		return( session.lookupDest( address, timeout ));
+		long start = SystemTime.getMonotonousTime();
+		
+		boolean ok = false;
+
+		try{
+		
+			Destination result = session.lookupDest( address, timeout );
+			
+			ok = result != null;
+			
+			return( result );
+		
+		}finally{
+			
+			//System.out.println( "Session: " + address + " - " + ok + " - " + ( SystemTime.getMonotonousTime() - start ));
+		}
 	}
 	
 	public Destination
@@ -281,14 +312,20 @@ I2PSMHolder
 				}
 			}
 						
+			boolean b32_address = address.endsWith( ".b32.i2p" );
+			
 			I2PAppContext ctx = router.getContext();
 			
 			NamingService name_service = ctx.namingService();
 	
-			if ( name_service != null ){
-			
-				remote_dest = name_service.lookup( address );
+			if ( name_service != null && !b32_address ){
+					
+				// long start = SystemTime.getMonotonousTime();
 				
+				remote_dest = name_service.lookup( address );
+			
+				// System.out.println( "NameService: " + address + " - " + (remote_dest!=null) + " - " + ( SystemTime.getMonotonousTime() - start ));
+
 			}else{
 				
 				remote_dest = new Destination();
@@ -304,7 +341,7 @@ I2PSMHolder
 				
 			if ( remote_dest == null ){
 				
-				if ( address.endsWith( ".b32.i2p" )){
+				if ( b32_address ){
 					
 					remote_dest = lookupDest( address, 30*1000 );
 					

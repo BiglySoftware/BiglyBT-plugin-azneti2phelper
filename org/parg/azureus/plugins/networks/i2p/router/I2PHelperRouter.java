@@ -611,6 +611,7 @@ I2PHelperRouter
 		throws Exception
 	{
 		opts.setProperty( "outbound.nickname", nickname ); 
+		opts.setProperty( "inbound.nickname", nickname ); 
 
         opts.setProperty( "inbound.lengthVariance", "0" );
         opts.setProperty( "outbound.lengthVariance", "0" ); 
