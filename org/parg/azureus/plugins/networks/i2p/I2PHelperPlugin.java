@@ -282,7 +282,7 @@ I2PHelperPlugin
 		    }
     
     
-    		5 locations - _dataLock.notifyAll() -> notifyActivity()
+    		7 locations - _dataLock.notifyAll() -> notifyActivity()
     		+++++++++++
     		
     	Fix OOM
