@@ -1201,6 +1201,12 @@ I2PHelperRouter
 		}
 	}
 	
+	public boolean
+	isDestroyed()
+	{
+		return( destroyed );
+	}
+	
 	public void
 	logInfo()
 	{
@@ -1461,6 +1467,13 @@ I2PHelperRouter
 					new I2PSMHolder( I2PHelperRouter.this )
 					{
 						@Override
+						protected String 
+						getName()
+						{
+							return( server_id );
+						}
+					
+						@Override
 						protected I2PSocketManager 
 						createSocketManager(
 							boolean	recovering )
@@ -1473,22 +1486,40 @@ I2PHelperRouter
 					        
 					        while( true ){
 						
-					        	InputStream is = new FileInputStream( dest_key_file );
+					        	if ( isReady()){
+					        								        	
+						        	InputStream is = new FileInputStream( dest_key_file );
+						        	
+							    	try{
+							    		Properties sm_props = new Properties();
+							    		
+							    		sm_props.putAll( sm_properties );
+							    		
+							    		setupSMExplicitOpts( sm_props, Constants.APP_NAME + ": " + server_id, sm_type );
+							    		
+							    		try{
+							    			sm = I2PSocketManagerFactory.createDisconnectedManager( is, i2p_host, i2p_port, sm_props );
+							    	
+							    			sm.getSession().connect();
+							    			
+							    		}catch( Throwable e ){
+							    			
+							    			if ( sm != null ){
+							    				
+							    				sm.destroySocketManager();
+							    				
+							    				sm = null;
+							    			}
+							    			
+							    			Debug.out( "Failed to create socket manager", e );
+							    		}
+							    		
+							    	}finally{
+							    		
+							    		is.close();
+							    	}
+					        	}
 					        	
-						    	try{
-						    		Properties sm_props = new Properties();
-						    		
-						    		sm_props.putAll( sm_properties );
-						    		
-						    		setupSMExplicitOpts( sm_props, Constants.APP_NAME + ": " + server_id, sm_type );
-						    		
-						    		sm = I2PSocketManagerFactory.createManager( is, i2p_host, i2p_port, sm_props );
-						    	
-						    	}finally{
-						    		
-						    		is.close();
-						    	}
-						    	
 								if ( sm != null ){
 									
 									break;
@@ -1557,6 +1588,15 @@ I2PHelperRouter
 						}
 						
 						@Override
+						protected boolean 
+						isReady()
+						{
+							Router r = router;
+				        	
+				        	return( r == null || r.getContext().clientManager().isAlive());
+						}
+						
+						@Override
 						protected void 
 						logMessage(
 							String str )
@@ -1570,7 +1610,7 @@ I2PHelperRouter
 				
 				log( "Socket manager startup complete" );					
 				
-				new AEThread2( "I2P:accepter" )
+				new AEThread2( "I2P:accepter (server)" )
 				{
 					@Override
 					public void
@@ -1580,7 +1620,7 @@ I2PHelperRouter
 							
 							try{
 								I2PSocket socket = sm_holder.accept();
-								
+																
 								if ( socket == null ){
 									
 									if ( server_destroyed ){
@@ -1609,12 +1649,19 @@ I2PHelperRouter
 								}
 							}catch( Throwable e ){
 								
-								if ( !Debug.getNestedExceptionMessage(e).toLowerCase(Locale.US).contains( "closed" )){
-
-									Debug.out( e );
+								if ( sm_holder.isReady()){
+									
+									if ( !Debug.getNestedExceptionMessage(e).toLowerCase(Locale.US).contains( "closed" )){
+								
+										Debug.out( e );
+									}
 								}
 								
-								break;
+								try{
+									Thread.sleep(2500);
+									
+								}catch( Throwable f ){
+								}
 							}
 						}
 					}
@@ -1673,6 +1720,7 @@ I2PHelperRouter
             
             socket_opts.setConnectTimeout( 120*1000 );
             socket_opts.setReadTimeout( 120*1000 );
+            socket_opts.setWriteTimeout( 120*1000 );
      
 			I2PSocket socket = sm_holder.connect( remote_dest, socket_opts );
 			

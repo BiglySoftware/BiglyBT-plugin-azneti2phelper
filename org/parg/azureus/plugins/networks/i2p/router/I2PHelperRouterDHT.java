@@ -38,6 +38,7 @@ import net.i2p.client.streaming.I2PSocketManagerFactory;
 import net.i2p.data.Base32;
 import net.i2p.data.Destination;
 import net.i2p.data.Hash;
+import net.i2p.router.Router;
 
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperDHT;
@@ -211,9 +212,18 @@ I2PHelperRouterDHT
 			        
 			        boolean[]	use_existing_key = { dest_key_file.exists() && !force_new_address };
 			        
+			        String f_suffix = suffix;
+			        
 			        sm_holder = 
 						new I2PSMHolder( router )
 						{
+							@Override
+							protected String 
+							getName()
+							{
+								return(  "dht"+f_suffix );
+							}
+						
 							@Override
 							protected I2PSocketManager 
 							createSocketManager(
@@ -226,23 +236,42 @@ I2PHelperRouterDHT
 						        I2PSocketManager	sm = null;
 				
 						        while( true ){
-						        				        
-									if ( recovering || use_existing_key[0] ){
-							         	
-							    		InputStream is = new FileInputStream( dest_key_file );
-							    	
-							    		try{
-							    			sm = I2PSocketManagerFactory.createManager( is, i2p_host, i2p_port, sm_properties );
-							    	
-							    		}finally{
-							    		
-							    			is.close();
-							    		}
-							        }else{
-							        	
-							        	sm = I2PSocketManagerFactory.createManager( i2p_host, i2p_port, sm_properties );
-							        }
-									
+						        			
+						        	if ( isReady()){
+						        									        	
+							        	try{
+											if ( recovering || use_existing_key[0] ){
+									         	
+									    		InputStream is = new FileInputStream( dest_key_file );
+									    	
+									    		try{
+									    			sm = I2PSocketManagerFactory.createDisconnectedManager( is, i2p_host, i2p_port, sm_properties );
+									    	
+									    			sm.getSession().connect();
+									    			
+									    		}finally{
+									    		
+									    			is.close();
+									    		}
+									        }else{
+									        	
+									        	sm = I2PSocketManagerFactory.createDisconnectedManager( null, i2p_host, i2p_port, sm_properties );
+									        	
+									        	sm.getSession().connect();
+									        }
+							        	}catch( Throwable e ){
+							        		
+							        		if ( sm != null ){
+							        			
+							        			sm.destroySocketManager();
+							        			
+							        			sm = null;
+							        		}
+							        		
+							        		Debug.out( "Failed to create socket manager", e );
+							        	}
+						        	}
+						        	
 									if ( sm != null ){
 										
 										dht_socket_manager_properties = new Properties();
@@ -286,6 +315,7 @@ I2PHelperRouterDHT
 						        return( sm );
 							}
 							
+							@Override
 							protected I2PSession
 							getSession(
 								I2PSocketManager		sm )
@@ -315,6 +345,15 @@ I2PHelperRouterDHT
 							}
 							
 							@Override
+							protected boolean 
+							isReady()
+							{
+								Router r = router.getRouter();
+					        	
+					        	return( r == null || r.getContext().clientManager().isAlive());
+							}
+							
+							@Override
 							protected void 
 							logMessage(
 								String str )
@@ -332,7 +371,7 @@ I2PHelperRouterDHT
 					
 					adapter.stateChanged( this, false );
 										
-					new AEThread2( "I2P:accepter" )
+					new AEThread2( "I2P:accepter (dht)" )
 					{
 						@Override
 						public void
@@ -371,12 +410,19 @@ I2PHelperRouterDHT
 									}
 								}catch( Throwable e ){
 									
-									if ( !Debug.getNestedExceptionMessage(e).toLowerCase(Locale.US).contains( "closed" )){
+									if ( sm_holder.isReady()){
 									
-										Debug.out( e );
+										if ( !Debug.getNestedExceptionMessage(e).toLowerCase(Locale.US).contains( "closed" )){
+									
+											Debug.out( e );
+										}
 									}
 									
-									break;
+									try{
+										Thread.sleep(2500);
+										
+									}catch( Throwable f ){
+									}
 								}
 							}
 						}

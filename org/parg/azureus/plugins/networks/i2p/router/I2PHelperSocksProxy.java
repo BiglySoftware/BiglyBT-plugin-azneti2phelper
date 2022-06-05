@@ -45,10 +45,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
-import net.i2p.I2PAppContext;
-import net.i2p.client.naming.NamingService;
 import net.i2p.client.streaming.I2PSocket;
-import net.i2p.client.streaming.I2PSocketManager;
 import net.i2p.client.streaming.I2PSocketOptions;
 import net.i2p.client.streaming.impl.MessageInputStream;
 import net.i2p.client.streaming.impl.MessageInputStream.ActivityListener;
@@ -311,6 +308,7 @@ I2PHelperSocksProxy
             
             socket_opts.setConnectTimeout( 120*1000 );
             socket_opts.setReadTimeout( 120*1000 );
+            socket_opts.setWriteTimeout( 120*1000 );
             
 			I2PSocket socket = sm_holder.connect( remote_dest, socket_opts );
 						

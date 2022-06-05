@@ -25,7 +25,6 @@ import java.util.*;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 
 import com.biglybt.core.util.AEThread2;
-import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.TimerEventPeriodic;
@@ -40,6 +39,7 @@ import net.i2p.client.streaming.I2PServerSocket;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketManager;
 import net.i2p.client.streaming.I2PSocketOptions;
+import net.i2p.client.streaming.RouterRestartException;
 import net.i2p.data.Destination;
 import net.i2p.data.Hash;
 import net.i2p.data.PrivateKeyFile;
@@ -47,6 +47,9 @@ import net.i2p.data.PrivateKeyFile;
 public abstract class 
 I2PSMHolder
 {
+	protected abstract String
+	getName();
+	
 	protected abstract I2PSocketManager
 	createSocketManager(
 		boolean		recovering )
@@ -58,6 +61,9 @@ I2PSMHolder
 		I2PSocketManager		sm )
 	
 		throws Exception;
+	
+	protected abstract boolean
+	isReady();
 	
 	protected abstract void
 	logMessage(
@@ -121,12 +127,27 @@ I2PSMHolder
 				"I2P Session Checker",
 				30*1000,
 				(e)->{
-					checkSession();
+					isSessionClosedSupport();
 				});
 	}
 	
 	private boolean
-	checkSession()
+	isSessionClosedSupport()
+	{
+		try{
+			return( isSessionClosedSupport( false ));
+			
+		}catch( Throwable e ){
+			
+			return( true );
+		}
+	}
+	
+	private boolean
+	isSessionClosedSupport(
+		boolean	throw_if_closed )
+	
+		throws Exception
 	{
 		boolean	closed = session.isClosed();
 		
@@ -134,18 +155,24 @@ I2PSMHolder
 			
 			synchronized( this ){
 				
-				if ( !destroyed ){
+				if ( ! ( destroyed || router.isDestroyed())){
 					
 					if ( !reconnecting ){
 						
 						reconnecting = true;
 						
 						logMessage( "I2P session closed, reconnecting..." );
-						
+												
 						AEThread2.createAndStartDaemon(
 							"I2PSocketManager - reconnect",
-							()->{
+							()->{								
 								try{
+									try{
+										socket_manager.destroySocketManager();
+										
+									}catch( Throwable e ){
+									}
+
 									while( true ){
 										
 										if ( destroyed ){
@@ -153,12 +180,18 @@ I2PSMHolder
 											break;
 										}
 										
+										I2PSocketManager rep_sm = null;
+										
 										try{
-											I2PSocketManager rep_sm = createSocketManager( true );
+											rep_sm = createSocketManager( true );
+											
+											System.out.println( "Created socket manager for " + getName());
 											
 											I2PSession	rep_session = getSession( rep_sm );
 											
 											if ( rep_session != null ){
+												
+												System.out.println( "Got session for " + getName());
 												
 												synchronized( I2PSMHolder.this ){
 													
@@ -175,21 +208,20 @@ I2PSMHolder
 													socket_manager		= rep_sm;
 													session				= rep_session;
 													server_socket		= null;
+													
+													rep_sm = null;
 												}
 												
 												logMessage( "I2P session reconnected" );
 												
 												break;
-												
-											}else{
-												
-												if ( rep_sm != null ){
-													
-													rep_sm.destroySocketManager();
-												}
 											}
 										}catch( Throwable e ){
 											
+											if ( rep_sm != null ){
+												
+												rep_sm.destroySocketManager();
+											}
 										}
 										
 										try{
@@ -215,13 +247,18 @@ I2PSMHolder
 			}
 		}
 		
+		if ( closed && throw_if_closed ){
+		
+			throw( new Exception( "Session is closed" ));
+		}
+		
 		return( closed );
 	}
 	
 	public boolean
 	isSessionClosed()
 	{
-		return( checkSession());
+		return( isSessionClosedSupport());
 	}
 	
 	public Destination
@@ -248,7 +285,7 @@ I2PSMHolder
 	
 		throws Exception
 	{
-		checkSession();
+		isSessionClosedSupport( true );
 			
 		long start = SystemTime.getMonotonousTime();
 		
@@ -274,7 +311,7 @@ I2PSMHolder
 	
 		throws Exception
 	{
-		checkSession();
+		isSessionClosedSupport( true );
 
 		long start = SystemTime.getMonotonousTime();
 		
@@ -411,22 +448,28 @@ I2PSMHolder
 	{
 		updated_options = options;
 
-		checkSession();
+		if ( !isSessionClosedSupport()){
 
-		session.updateOptions( options );
+			session.updateOptions( options );
+		}
 	}
 	
 	public byte[]
 	makeI2PDatagram(
 		byte[]	payload )
 	{		
-		checkSession();
+		if ( isSessionClosedSupport()){
 
-		I2PDatagramMaker dgMaker = new I2PDatagramMaker( session );
-        
-        payload = dgMaker.makeI2PDatagram( payload );
-        
-        return( payload );
+			return( null );
+			
+		}else{
+			
+			I2PDatagramMaker dgMaker = new I2PDatagramMaker( session );
+	        
+	        payload = dgMaker.makeI2PDatagram( payload );
+	        
+	        return( payload );
+		}
 	}
 	
 	public boolean
@@ -442,7 +485,7 @@ I2PSMHolder
 	
 		throws Exception
 	{
-		checkSession();
+		isSessionClosedSupport( true );
 
 		return( session.sendMessage( dest, payload, offset, size, proto, fromPort, toPort, options ));
 	}
@@ -454,7 +497,7 @@ I2PSMHolder
 	
 		throws Exception
 	{
-		checkSession();
+		isSessionClosedSupport( true );
 
 		return( socket_manager.connect( dest, opts ));
 	}
@@ -464,14 +507,28 @@ I2PSMHolder
 	
 		throws Exception
 	{
-		checkSession();
+		isSessionClosedSupport( true );
 
+		I2PSocketManager sm = socket_manager;
+		
 		if ( server_socket == null ){
 		
-			server_socket = socket_manager.getServerSocket();
+			server_socket = sm.getServerSocket();
 		}
 		
-		return( server_socket.accept());
+		try{
+			return( server_socket.accept());
+			
+		}catch( RouterRestartException e ){
+			
+			server_socket.close();
+			
+			server_socket = null;
+			
+			sm.destroySocketManager();
+			
+			throw( e );
+		}
 	}
 	
 	public void
