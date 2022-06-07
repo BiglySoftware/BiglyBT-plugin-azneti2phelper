@@ -315,7 +315,17 @@ I2PHelperPlugin
                 cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
                 _cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
                 
+              
                 
+                
+                
+       	Copy Resource Files
+       	-------------------
+       	
+       	Copy <release>\router\resources\continents.txt	to /net/i2p/router/util/resources/
+       	
+       	Copy <release>\core\resources/countries.txt 	to /net/i2p/util/resources/
+      	Copy <release>\core\resources/dohservers.txt	to /net/i2p/util/resources/
             
         NO LONGER NEEDED
         ----------------
