@@ -28,7 +28,9 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.LineNumberReader;
 import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -40,7 +42,7 @@ import java.util.Vector;
 public class 
 I2PHelperUtils 
 {
-	protected static Properties
+	public static Properties
 	readProperties(
 		File		file )
 	{
@@ -68,7 +70,48 @@ I2PHelperUtils
 		return( props );
 	}
 	
-	protected static void
+	public static List<String>
+	readPropertiesAsList(
+		File		file )
+	{
+		List<String>	lines = new ArrayList<>();
+		
+		try{
+		
+			if ( file.exists()){
+				
+				InputStream is = new FileInputStream( file );
+			
+				try{
+					LineNumberReader lnr = new LineNumberReader( new InputStreamReader( is, "UTF-8" ));
+					
+					while( true ){
+						
+						String line = lnr.readLine();
+						
+						if ( line == null ){
+							
+							break;
+						}
+						
+						lines.add( line );
+					}
+					
+				}finally{
+					
+					is.close();
+				}
+			}
+		}catch( Throwable e ){
+			
+			e.printStackTrace();
+		}
+		
+		return( lines );
+	}
+	
+	
+	public static void
 	normalizeProperties(
 		Properties	props )
 	{
@@ -86,7 +129,7 @@ I2PHelperUtils
 	}
 	
 
-	protected static void
+	public static void
 	writeProperties(
 		File		file,
 		Properties	_props )
@@ -112,6 +155,36 @@ I2PHelperUtils
 			
 			try{
 				props.store( new OutputStreamWriter(os, "UTF-8" ), "" );
+				
+			}finally{
+				
+				os.close();
+			}
+		}catch( Throwable e ){
+			
+			e.printStackTrace();
+		}
+	}
+	
+	public static void
+	writeProperties(
+		File			file,
+		List<String>	lines )
+	{
+		try{	
+			FileOutputStream os = new FileOutputStream( file );
+			
+			try{
+				PrintWriter pw = new PrintWriter( new OutputStreamWriter(os, "UTF-8" ));
+				
+				for ( String line: lines ){
+					
+					pw.println( line );
+				}
+				
+				pw.flush();
+				
+				pw.close();
 				
 			}finally{
 				

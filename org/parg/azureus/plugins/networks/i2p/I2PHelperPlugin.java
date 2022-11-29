@@ -41,6 +41,7 @@ import java.net.URLConnection;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -125,6 +126,7 @@ import org.parg.azureus.plugins.networks.i2p.plugindht.I2PHelperDHTPluginInterfa
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouter;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouterDHT;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperSocksProxy;
+import org.parg.azureus.plugins.networks.i2p.router.I2PHelperUtils;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouter.ServerInstance;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
 import org.parg.azureus.plugins.networks.i2p.swt.I2PHelperView;
@@ -382,9 +384,11 @@ I2PHelperPlugin
 	private IntParameter 			socks_port_param;
 	private BooleanParameter 		socks_allow_public_param;
 	private InfoParameter 			port_info_param;
-	
+	private InfoParameter 			http_proxy_info_param;
+
 	private int						active_int_port;
 	private int						active_ext_port;
+	private Proxy					active_http_proxy;
 	
 	private I2PHelperView			ui_view;
 	
@@ -524,6 +528,9 @@ I2PHelperPlugin
 	private I2PHelperHostnameService	hostname_service;
 	
 	private I2PHelperSocketForwarder	socket_forwarder = new I2PHelperSocketForwarder();
+	
+	private static final int HTTP_PROXY_PORT_DEFAULT	= 14444;
+	private static final String HTTP_PROXY_OUTPROXIES_DEFAULT = "exit.stormycloud.i2p";
 	
 	private static final int CPU_THROTTLE_DEFAULT	= 2;
 		
@@ -859,7 +866,12 @@ I2PHelperPlugin
 			ext_port_param	 	= config_model.addIntParameter2( "azi2phelper.external.port", "azi2phelper.external.port", 0 );
 			
 			ext_port_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
-					
+						
+			BooleanParameter use_upnp = config_model.addBooleanParameter2( "azi2phelper.upnp.enable", "azi2phelper.upnp.enable", true );
+
+			port_info_param = config_model.addInfoParameter2( "azi2phelper.port.info", "" );
+			port_info_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
+			
 			final BooleanParameter mix_enabled_param 	= config_model.addBooleanParameter2( I2PHelperRouter.PARAM_MIX_ENABLED, "azi2phelper.enable", I2PHelperRouter.PARAM_MIX_ENABLED_DEFAULT );
 			final IntParameter mix_in_hops_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_MIX_INBOUND_HOPS, "azi2phelper.inbound.hops", I2PHelperRouter.PARAM_MIX_INBOUND_HOPS_DEFAULT, 0, I2PHelperRouter.MAX_HOPS );
 			final IntParameter mix_in_quant_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_MIX_INBOUND_QUANTITY, "azi2phelper.inbound.quantity", I2PHelperRouter.PARAM_MIX_INBOUND_QUANTITY_DEFAULT, 1, I2PHelperRouter.MAX_TUNNELS );
@@ -955,15 +967,68 @@ I2PHelperPlugin
 				}
 			}
 			
-			port_info_param = config_model.addInfoParameter2( "azi2phelper.port.info", "" );
-			port_info_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
-
 			updatePortInfo();
-			
-			final BooleanParameter use_upnp = config_model.addBooleanParameter2( "azi2phelper.upnp.enable", "azi2phelper.upnp.enable", true );
-			
+						
 			final BooleanParameter always_socks = config_model.addBooleanParameter2( "azi2phelper.socks.always", "azi2phelper.socks.always", false );
 		
+			ParameterGroup socks_group = 
+					config_model.createGroup( 
+						"azi2phelper.socks",
+						new Parameter[]{ 
+								socks_port_param, socks_allow_public_param,	always_socks
+						});
+			
+				// HTTP proxy
+			
+			BooleanParameter enable_http_proxy = config_model.addBooleanParameter2( "azi2phelper.httpproxy.enable", "azi2phelper.httpproxy.enable", true );
+
+			IntParameter	p_http_proxy_port	= config_model.addIntParameter2( "azi2phelper.httpproxy.port", "azi2phelper.httpproxy.port", 0, 0, 65535 );
+
+			StringParameter 	http_proxy_outproxies 	= config_model.addStringParameter2( "azi2phelper.httpproxy.outproxies", "azi2phelper.httpproxy.outproxies", HTTP_PROXY_OUTPROXIES_DEFAULT );
+
+			http_proxy_info_param = config_model.addInfoParameter2( "azi2phelper.httpproxy.info", "" );
+			http_proxy_info_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
+
+			int active_http_proxy_port = 0;
+			
+			if ( enable_http_proxy.getValue()){
+					
+				int http_proxy_port = p_http_proxy_port.getValue();
+				
+				if ( http_proxy_port == 0 ){
+					
+					http_proxy_port = plugin_config.getPluginIntParameter( "azi2phelper.httpproxy.port.auto", 0 );
+					
+					if ( http_proxy_port == 0 || !testPort( http_proxy_port )){
+						
+						http_proxy_port = allocatePort( HTTP_PROXY_PORT_DEFAULT, int_port, ext_port );
+						
+						plugin_config.setPluginParameter( "azi2phelper.httpproxy.port.auto", http_proxy_port );
+						
+						port_changed = true;
+					}
+				}else{
+					
+					if  ( !testPort( http_proxy_port )){
+						
+						log( "Testing of explicitly configured HTTP proxy port " + http_proxy_port + " failed - this isn't good" );
+					}
+				}
+				
+				active_http_proxy_port = http_proxy_port;
+				
+			}else{
+				
+				active_http_proxy_port = 0;
+			}
+			
+			ParameterGroup http_proxy_group = 
+					config_model.createGroup( 
+						"azi2phelper.httpproxy",
+						new Parameter[]{ 
+								enable_http_proxy, p_http_proxy_port, http_proxy_outproxies, http_proxy_info_param
+						});
+						
 			final IntParameter 	cpu_throttle	= config_model.addIntParameter2( "azi2phelper.cpu.throttle", "azi2phelper.cpu.throttle", CPU_THROTTLE_DEFAULT, 0, 100 );
 			cpu_throttle.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
 
@@ -992,6 +1057,9 @@ I2PHelperPlugin
 
 			final IntParameter 		ext_i2p_port_param 		= config_model.addIntParameter2( "azi2phelper.use.ext.port", "azi2phelper.use.ext.port", 7654 );
 			ext_i2p_port_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
+			
+			final IntParameter 		ext_i2p_http_proxy_port_param 		= config_model.addIntParameter2( "azi2phelper.httpproxy.external.port", "azi2phelper.httpproxy.external.port", 4444 );
+			ext_i2p_http_proxy_port_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
 
 				// tunnel config
 			
@@ -1050,10 +1118,12 @@ I2PHelperPlugin
 			config_model.createGroup( 
 				"azi2phelper.internals.group",
 				new Parameter[]{ 
-						i2p_address_param, new_id, change_id, int_port_param, ext_port_param, floodfill_param,
+						i2p_address_param, new_id, change_id, int_port_param, ext_port_param, use_upnp, port_info_param,
 						tunnel_group,
-						socks_port_param, socks_allow_public_param,
-						port_info_param, use_upnp, always_socks, cpu_throttle, ext_i2p_param, ext_i2p_host_param, ext_i2p_port_param });
+						socks_group,
+						http_proxy_group,
+						cpu_throttle, floodfill_param, 
+						ext_i2p_param, ext_i2p_host_param, ext_i2p_port_param, ext_i2p_http_proxy_port_param });
 			
 			
 			final StringParameter 	command_text_param = config_model.addStringParameter2( "azi2phelper.cmd.text", "azi2phelper.cmd.text", "" );
@@ -1162,11 +1232,19 @@ I2PHelperPlugin
 							ext_i2p_param.setEnabled( plugin_enabled );
 							ext_i2p_host_param.setEnabled( !enabled_not_ext );
 							ext_i2p_port_param.setEnabled( !enabled_not_ext );
+							ext_i2p_http_proxy_port_param.setEnabled( !enabled_not_ext );
 							
 							floodfill_param.setEnabled( enabled_not_ext );
 							
 							command_text_param.setEnabled( plugin_enabled );
 							command_exec_param.setEnabled( plugin_enabled );
+							
+							boolean http_proxy_enabled = plugin_enabled && enable_http_proxy.getValue();
+							
+							enable_http_proxy.setEnabled( plugin_enabled );
+							http_proxy_outproxies.setEnabled( http_proxy_enabled && enabled_not_ext );
+							p_http_proxy_port.setEnabled( http_proxy_enabled && enabled_not_ext );
+							http_proxy_info_param.setEnabled(http_proxy_enabled);
 						}
 					};
 			
@@ -1176,6 +1254,8 @@ I2PHelperPlugin
 			
 			ext_i2p_param.addListener( enabler_listener );
 			link_rates_param.addListener( enabler_listener );
+			
+			enable_http_proxy.addListener(enabler_listener);
 			
 			enabler_listener.parameterChanged( null );
 				
@@ -1242,9 +1322,43 @@ I2PHelperPlugin
 			
 			final boolean	is_external_router = ext_i2p_param.getValue();
 			
-			if ( plugin_enabled ){
+			if ( is_external_router ){
 				
-				log( "Internal port=" + int_port +", external=" + ext_port + ", socks=" + sock_port );
+				if ( enable_http_proxy.getValue()){
+					
+					active_http_proxy_port = ext_i2p_http_proxy_port_param.getValue();
+					
+				}else{
+					
+					active_http_proxy_port = 0; 
+				}
+			}
+			
+			updateHTTPProxyInfo( active_http_proxy_port );
+			
+			if ( plugin_enabled ){
+
+				if ( active_http_proxy_port > 0 ){
+					
+					try{
+						active_http_proxy = 
+							new Proxy( 
+								Proxy.Type.HTTP,
+								new InetSocketAddress( 
+									is_external_router?ext_i2p_host_param.getValue():"127.0.0.1",
+									active_http_proxy_port));
+						
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+						
+						log( "Failed to create HTTP proxy", e );
+					}
+				}
+				
+				setupHTTPProxy( plugin_dir, active_http_proxy_port, int_port, http_proxy_outproxies.getValue(), is_external_router );
+
+				log( "Internal port=" + int_port +", external=" + ext_port + ", socks=" + sock_port + ", http proxy=" + active_http_proxy_port );
 
 				message_handler = new I2PHelperMessageHandler( I2PHelperPlugin.this );
 									
@@ -1603,6 +1717,319 @@ I2PHelperPlugin
 			if ( e instanceof PluginException ){
 				
 				throw((PluginException)e);
+			}
+		}
+	}
+	
+	void
+	setupHTTPProxy(
+		File		config_dir,
+		int			http_proxy_port,
+		int			i2cp_port,
+		String		outproxies,
+		boolean		is_external )
+	{
+		boolean enabled = http_proxy_port>0;
+		
+		if ( !is_external ){
+			
+			/*
+			{
+				String WEBAPPS = "webapps.config";
+				
+				File webapps = new File( config_dir, WEBAPPS );
+				
+				LinkedList<String>	lines_out = new LinkedList<>();
+				
+				boolean updated = false;
+	
+				if ( webapps.exists()){
+					
+					List<String> lines = I2PHelperUtils.readPropertiesAsList( webapps );
+									
+					for ( String line: lines ){
+						
+						lines_out.add( line );
+						
+						line = line.trim();
+						
+						if ( line.startsWith( "#" )){
+							
+							continue;
+						}
+						
+						int pos = line.indexOf( '=' );
+						
+						if ( pos != -1 ){
+							
+							String key = line.substring( 0, pos ).trim();
+							String value = line.substring( pos+1 ).trim();
+							
+							if ( key.equals( "webapps.i2ptunnel.startOnLoad" )){
+								
+								String req = enabled?"true":"false";
+								
+								if ( !value.equals( req )){
+									
+									lines_out.removeLast();
+									
+									lines_out.add("webapps.i2ptunnel.startOnLoad=" + req );
+									
+									updated = true;
+								}
+							}
+						}
+					}
+				}else{
+					
+					if ( enabled ){
+						
+						lines_out.add("webapps.i2ptunnel.startOnLoad=true" );
+						
+						updated = true;
+					}
+				}
+				
+				if ( updated ){
+					
+					I2PHelperUtils.writeProperties( webapps, lines_out );
+				}
+			}
+			*/
+			
+			{
+				String CLIENTS = "clients.config";
+				
+				File clients = new File( config_dir, CLIENTS );
+				
+				LinkedList<String>	lines_out = new LinkedList<>();
+				
+				boolean updated = false;
+	
+				String[] expected_config = {  // clientApp.n.<x>
+					"args=i2ptunnel.config",
+					"delay=-1",
+					"main=net.i2p.i2ptunnel.TunnelControllerGroup",
+					"name=Application tunnels",
+					"startOnLoad=true"
+				};
+					
+				if ( clients.exists()){
+					
+					List<String> lines = I2PHelperUtils.readPropertiesAsList( clients );
+							
+					Map<Integer,List<String>>	apps = new HashMap<Integer, List<String>>();
+					
+					LinkedList<Object>	objs_out = new LinkedList<Object>();
+					
+					int i2ptunnel_num 	= -1;
+					int highest_num		= -1;
+					
+					for ( String line: lines ){
+						
+						objs_out.add( line );
+						
+						line = line.trim();
+						
+						if ( line.startsWith( "#" )){
+							
+							continue;
+						}
+						
+						int pos = line.indexOf( '=' );
+						
+						if ( pos != -1 ){
+							
+							String key = line.substring( 0, pos ).trim();
+							String value = line.substring( pos+1 ).trim();
+							
+							String[] bits = key.split( "\\.", 3 );
+							
+							if ( bits.length == 3 ){
+								
+								if ( bits[0].equalsIgnoreCase( "clientApp" )){
+									
+									try{
+										int num = Integer.parseInt( bits[1] );
+										
+										List<String> l = (List<String>)apps.get( num );
+										
+										objs_out.removeLast();
+										
+										if ( l == null ){
+											
+											l = new ArrayList<>();
+											
+											apps.put( num, l );
+											
+											objs_out.add( num );
+											
+											if ( num > highest_num ){
+												
+												highest_num = num;
+											}
+										}
+										
+										l.add( bits[2] + "=" + value );
+										
+										if ( bits[2].equalsIgnoreCase( "args" ) && value.equalsIgnoreCase( "i2ptunnel.config" )){
+											
+											i2ptunnel_num = num;
+										}
+										
+									}catch( Throwable e ){
+										
+									}
+								}
+							}
+						}
+					}
+					
+					if ( i2ptunnel_num == -1 ){
+						
+						if ( enabled ){
+							
+							i2ptunnel_num = highest_num + 1;
+							
+							objs_out.add( i2ptunnel_num );
+							
+							List<String> l = new ArrayList<>();
+							
+							l.addAll( Arrays.asList( expected_config ));
+							
+							apps.put( i2ptunnel_num, l );
+						}
+					}else{
+						
+						if ( enabled ){
+							
+							List<String> l = apps.get( i2ptunnel_num );
+							
+							l.clear();
+							
+							l.addAll( Arrays.asList( expected_config ));
+							
+						}else{
+							
+							apps.remove( i2ptunnel_num );
+						}
+					}
+										
+					for ( Object o: objs_out ){
+						
+						if ( o instanceof String ){
+							
+							lines_out.add((String)o);
+							
+						}else{
+							
+							int	app_num = (Integer)o;
+							
+							List<String> l = (List<String>)apps.get( app_num );
+							
+							if ( l != null ){
+								
+								for ( String str: l ){
+									
+									lines_out.add( "clientApp." + app_num + "." + str );
+								}
+							}
+						}
+					}
+					
+					if ( lines_out.size() != lines.size ()){
+						
+						updated = true;
+						
+					}else{
+					
+						int pos = 0;
+						
+						for ( String l: lines_out ){
+							
+							if ( !l.equals( lines.get( pos++ ))){
+								
+								updated = true;
+								
+								break;
+							}
+						}
+					}
+				}else{
+					
+					if ( enabled ){
+						
+						for ( String s: expected_config ){
+							
+							lines_out.add( "clientApp.0." + s );
+						}
+						
+						updated = true;
+					}
+				}
+				
+				if ( updated ){
+					
+					I2PHelperUtils.writeProperties( clients, lines_out );
+				}
+			}
+			
+			if ( enabled ){
+				
+				String I2PTUNNEL = "i2ptunnel.config";
+				
+				File i2ptunnel = new File( config_dir, I2PTUNNEL );
+
+				String[] expected_config = { 
+					"description=HTTP proxy for browsing eepsites and the web",
+					"i2cpHost=127.0.0.1",
+					"i2cpPort=" + i2cp_port,
+					"interface=127.0.0.1",
+					"listenPort=" + http_proxy_port,
+					"name=I2P HTTP Proxy",
+					"option.i2cp.reduceIdleTime=900000",
+					"option.i2cp.reduceOnIdle=true",
+					"option.i2cp.reduceQuantity=1",
+					"option.i2p.streaming.connectDelay=1000",
+					"option.i2ptunnel.httpclient.SSLOutproxies=" + outproxies,
+					"option.inbound.length=3",
+					"option.inbound.lengthVariance=0",
+					"option.inbound.nickname=shared clients",
+					"option.outbound.length=3",
+					"option.outbound.lengthVariance=0",
+					"option.outbound.nickname=shared clients",
+					"option.outbound.priority=10",
+					"proxyList=" + outproxies,
+					"sharedClient=true",
+					"startOnLoad=true",
+					"type=httpclient",
+				};
+				
+				List<String> lines = I2PHelperUtils.readPropertiesAsList( i2ptunnel );
+
+				boolean 	update = false;
+				
+				if ( lines.size() != expected_config.length ){
+					
+					update = true;
+					
+				}else{
+					
+					for( int i=0;i<lines.size();i++){
+						
+						if ( !expected_config[i].equals( lines.get(i))){
+							
+							update = true;
+							
+							break;
+						}
+					}
+				}
+				
+				if ( update ){
+					
+					I2PHelperUtils.writeProperties( i2ptunnel, Arrays.asList( expected_config ));
+				}
 			}
 		}
 	}
@@ -1969,6 +2396,24 @@ I2PHelperPlugin
 		}
 		
 		port_info_param.setValue( active_int_port + "/" + active_ext_port + "/" + socks_port );
+	}
+	
+	private void
+	updateHTTPProxyInfo(
+		int	port )
+	{
+		String	port_str;
+					
+		if ( port > 0 ){
+				
+			port_str = "" + port;
+				
+		}else{
+				
+			port_str = "inactive";
+		}
+		
+		http_proxy_info_param.setValue( port_str );
 	}
 	
 	public I2PHelperRouter
@@ -4133,7 +4578,7 @@ I2PHelperPlugin
 		
 		throws IPCException
 	{
-		return( getProxy( reason, url,null ));
+		return( getProxy( reason, url, null ));
 	}
 	
 	public Object[]
@@ -4148,19 +4593,44 @@ I2PHelperPlugin
 			
 			return( null );
 		}
-		
+
 		String 	host = url.getHost();
-				
-		if ( !host.toLowerCase().endsWith( ".i2p" )){
-			
-			return( null );
-		}
-		
+
+		String net = AENetworkClassifier.categoriseAddress( host );
+
 		if ( proxy_options == null ){
 			
 			proxy_options = new HashMap<String, Object>();
 		}
 		
+			// could support public addresses if we have a functioning outproxy but for the 
+			// moment leave this to the Tor helper
+		
+		if ( net == AENetworkClassifier.AT_I2P ){
+			
+			String pref_pt = (String)proxy_options.get( "preferred_proxy_type" );
+			
+			if ( pref_pt != null && pref_pt.equalsIgnoreCase( "HTTP" )){
+				
+				if ( active_http_proxy != null ){
+					
+					Proxy proxy = new Proxy( active_http_proxy.type(), active_http_proxy.address());
+					
+					synchronized( this ){
+						
+						proxy_map.put( proxy, new ProxyMapEntry( host, null, null ));
+					}
+					
+					return( new Object[]{ proxy, url, host });
+				}
+			}
+		}
+				
+		if ( net != AENetworkClassifier.AT_I2P ){
+			
+			return( null );
+		}
+						
 		//System.out.println( "getProxy: " + reason + "/" + url + ", opt=" + getOptionsString( proxy_options ));
 
 		
@@ -5152,15 +5622,19 @@ I2PHelperPlugin
 	private int
 	allocatePort(
 		int				def,
-		int				exclude_port )
+		int...			exclude_ports )
 	{
+outer:
 		for ( int i=0;i<32;i++){
 			
-			int port = 20000 + RandomUtils.nextInt( 20000 );
+			int port = i==0?def:(20000 + RandomUtils.nextInt( 20000 ));
 			
-			if ( port == exclude_port ){
+			for (int j=0;j<exclude_ports.length; j++ ){
+
+				if ( port == exclude_ports[j] ){
 				
-				continue;
+					continue outer;
+				}
 			}
 			
 			ServerSocketChannel ssc = null;
