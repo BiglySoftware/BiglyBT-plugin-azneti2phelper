@@ -52,6 +52,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.data.Base32;
@@ -390,6 +391,11 @@ I2PHelperPlugin
 	private int						active_ext_port;
 	private Proxy					active_http_proxy;
 	
+	private AtomicLong				http_proxy_request_count	= new AtomicLong();
+	private AtomicLong				http_proxy_request_ok		= new AtomicLong();
+	private AtomicLong				http_proxy_request_failed	= new AtomicLong();
+	
+
 	private I2PHelperView			ui_view;
 	
 	private boolean					plugin_enabled;
@@ -1365,7 +1371,7 @@ I2PHelperPlugin
 				timer_event = 
 					SimpleTimer.addPeriodicEvent(
 						"i2phelper:checker",
-						60*1000,
+						30*1000,
 						new TimerEventPerformer()
 						{	
 							private int			tick_count;
@@ -1394,85 +1400,95 @@ I2PHelperPlugin
 								
 								tick_count++;
 								
-								if ( !is_external_router ){
-																			// we don't manage rate limits for external routers
+								if ( http_proxy_request_count.get() > 0 ){
+									
+									String stats = "HTTP Proxy requests=" + http_proxy_request_count.get() + ", ok=" + http_proxy_request_ok.get() + ", failed=" + http_proxy_request_failed.get();
 	
-									int mult;
-									
-									if ( link_rates_param.getValue()){
-										
-										mult = 1;
-										
-									}else{
-									
-										long[] totals = message_handler.getDataTotals();
-										
-										long current_total = totals[0] + totals[1];
-										
-										long	now = SystemTime.getCurrentTime();
-										
-										if ( current_total != last_total ){
-										
-											last_total = current_total;
-											
-											last_active = now;
-										}
-										
-										boolean	is_active = now - last_active <= 5*60*1000;
-										
-										mult = is_active?limit_multiplier_param.getValue():1;
-																					
-										if ((!floodfill_capable) && tick_count%10 == 0 ){
-																							
-											floodfill_capable = tryFloodfill();
-										}
-											
-										if ( floodfill_capable && mult < 2){
-												
-											mult = 2;
-										}
-									}
-									
-									I2PHelperRouter current_router = router;
-									
-									if ( current_router != null ){
-										
-										if ( current_router.getRateMultiplier() != mult || current_router.getFloodfillCapable() != floodfill_capable ){
-										
-											current_router.setRateMultiplier( mult );
-											
-											current_router.setFloodfillCapable( floodfill_capable );
-											
-											current_router.updateProperties();
-										}
-										
-										try{
-												// net.i2p.router.web.helpers.SummaryHelper skew logic
-											
-											long skew = current_router.getRouter().getContext().commSystem().getFramedAveragePeerClockSkew( 33 );
-											
-											log( "Detected router time skew: " + skew );
-
-											skew =  Math.abs( skew );
-											
-											if ( skew > 30*1000 ){
-												
-												if ( log != null && !alert_logged ){
-													
-													alert_logged = true;
-													
-													log.logAlert(
-														LoggerChannel.LT_WARNING,
-														"I2P reported a clock skew of " + skew + "ms. Correct your computer time setting if you want I2P to work correctly." );
-												}
-											}
-										}catch( Throwable e ){
-											
-										}
-									}
+									log( stats );
 								}
 								
-								checkTunnelQuantities();
+								if ( tick_count % 2 == 0 ){
+									
+									if ( !is_external_router ){
+																				// we don't manage rate limits for external routers
+		
+										int mult;
+										
+										if ( link_rates_param.getValue()){
+											
+											mult = 1;
+											
+										}else{
+										
+											long[] totals = message_handler.getDataTotals();
+											
+											long current_total = totals[0] + totals[1];
+											
+											long	now = SystemTime.getCurrentTime();
+											
+											if ( current_total != last_total ){
+											
+												last_total = current_total;
+												
+												last_active = now;
+											}
+											
+											boolean	is_active = now - last_active <= 5*60*1000;
+											
+											mult = is_active?limit_multiplier_param.getValue():1;
+																						
+											if ((!floodfill_capable) && tick_count%10 == 0 ){
+																								
+												floodfill_capable = tryFloodfill();
+											}
+												
+											if ( floodfill_capable && mult < 2){
+													
+												mult = 2;
+											}
+										}
+										
+										I2PHelperRouter current_router = router;
+										
+										if ( current_router != null ){
+											
+											if ( current_router.getRateMultiplier() != mult || current_router.getFloodfillCapable() != floodfill_capable ){
+											
+												current_router.setRateMultiplier( mult );
+												
+												current_router.setFloodfillCapable( floodfill_capable );
+												
+												current_router.updateProperties();
+											}
+											
+											try{
+													// net.i2p.router.web.helpers.SummaryHelper skew logic
+												
+												long skew = current_router.getRouter().getContext().commSystem().getFramedAveragePeerClockSkew( 33 );
+												
+												log( "Detected router time skew: " + skew );
+	
+												skew =  Math.abs( skew );
+												
+												if ( skew > 30*1000 ){
+													
+													if ( log != null && !alert_logged ){
+														
+														alert_logged = true;
+														
+														log.logAlert(
+															LoggerChannel.LT_WARNING,
+															"I2P reported a clock skew of " + skew + "ms. Correct your computer time setting if you want I2P to work correctly." );
+													}
+												}
+											}catch( Throwable e ){
+												
+											}
+										}
+									}
+									
+									checkTunnelQuantities();
+								}
 							}
 						});
 				
@@ -4603,10 +4619,10 @@ I2PHelperPlugin
 			proxy_options = new HashMap<String, Object>();
 		}
 		
-			// could support public addresses if we have a functioning outproxy but for the 
-			// moment leave this to the Tor helper
+		Boolean force_proxy = (Boolean)proxy_options.get( "force_proxy" );
 		
-		if ( net == AENetworkClassifier.AT_I2P ){
+		if ( 	net == AENetworkClassifier.AT_I2P ||
+				( net == AENetworkClassifier.AT_PUBLIC && force_proxy != null && force_proxy )){
 			
 			String pref_pt = (String)proxy_options.get( "preferred_proxy_type" );
 			
@@ -4620,6 +4636,10 @@ I2PHelperPlugin
 						
 						proxy_map.put( proxy, new ProxyMapEntry( host, null, null ));
 					}
+					
+					log( "HTTP Proxy request for " + url );
+					
+					http_proxy_request_count.incrementAndGet();
 					
 					return( new Object[]{ proxy, url, host });
 				}
@@ -4684,22 +4704,17 @@ I2PHelperPlugin
 		
 			if ( entry != null ){
 					
-				// System.out.println( "proxy_map=" + proxy_map.size());
-
-				// String 	host 				= entry.getHost();
+				if ( proxy.type() == Proxy.Type.HTTP ){
 				
-				/*
-				if ( good ){
-					
-					proxy_request_ok.incrementAndGet();
-					
-				}else{
-					
-					proxy_request_failed.incrementAndGet();
+					if ( good ){
+						
+						http_proxy_request_ok.incrementAndGet();
+						
+					}else{
+						
+						http_proxy_request_failed.incrementAndGet();
+					}
 				}
-				
-				updateProxyHistory( host, good );
-				*/
 				
 				String	intermediate	= entry.getIntermediateHost();
 	

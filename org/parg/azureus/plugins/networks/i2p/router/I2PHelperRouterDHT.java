@@ -410,18 +410,21 @@ I2PHelperRouterDHT
 									}
 								}catch( Throwable e ){
 									
-									if ( sm_holder.isReady()){
-									
-										if ( !Debug.getNestedExceptionMessage(e).toLowerCase(Locale.US).contains( "closed" )){
-									
-											Debug.out( e );
-										}
-									}
-									
-									try{
-										Thread.sleep(2500);
+									if ( !destroyed ){
 										
-									}catch( Throwable f ){
+										if ( sm_holder.isReady()){
+										
+											if ( !Debug.getNestedExceptionMessage(e).toLowerCase(Locale.US).contains( "closed" )){
+										
+												Debug.out( e );
+											}
+										}
+										
+										try{
+											Thread.sleep(2500);
+											
+										}catch( Throwable f ){
+										}
 									}
 								}
 							}
