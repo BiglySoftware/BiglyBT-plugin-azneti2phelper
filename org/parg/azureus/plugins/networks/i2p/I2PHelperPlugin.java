@@ -986,7 +986,7 @@ I2PHelperPlugin
 			
 				// HTTP proxy
 			
-			BooleanParameter enable_http_proxy = config_model.addBooleanParameter2( "azi2phelper.httpproxy.enable", "azi2phelper.httpproxy.enable", true );
+			BooleanParameter enable_http_proxy = config_model.addBooleanParameter2( "azi2phelper.httpproxy.enable", "azi2phelper.httpproxy.enable", false );
 
 			IntParameter	p_http_proxy_port	= config_model.addIntParameter2( "azi2phelper.httpproxy.port", "azi2phelper.httpproxy.port", 0, 0, 65535 );
 
