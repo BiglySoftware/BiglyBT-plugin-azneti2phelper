@@ -240,6 +240,12 @@ I2PHelperRouter
 		}
 	}
 	
+	public I2PHelperPlugin
+	getPlugin()
+	{
+		return( plugin );
+	}
+	
 	public int
 	getIntegerParameter(
 		String		name )

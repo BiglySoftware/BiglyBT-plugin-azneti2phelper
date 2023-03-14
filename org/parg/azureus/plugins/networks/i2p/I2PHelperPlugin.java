@@ -31,6 +31,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -53,6 +54,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.jar.Attributes.Name;
 
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.data.Base32;
@@ -63,6 +65,7 @@ import net.i2p.util.NativeBigInteger;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.download.DownloadManager;
+import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.stats.transfer.LongTermStats;
@@ -146,7 +149,12 @@ import com.biglybt.core.dht.transport.DHTTransportAlternativeContact;
 import com.biglybt.core.dht.transport.DHTTransportAlternativeNetwork;
 import com.biglybt.core.dht.transport.udp.impl.DHTUDPUtils;
 import com.biglybt.core.networkmanager.NetworkManager;
+import com.biglybt.core.networkmanager.VirtualServerChannelSelector;
+import com.biglybt.core.networkmanager.VirtualServerChannelSelector.SelectListener;
+import com.biglybt.core.networkmanager.VirtualServerChannelSelectorFactory;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
+import com.biglybt.core.networkmanager.impl.tcp.IncomingSocketChannelManager;
+import com.biglybt.core.networkmanager.impl.tcp.TCPNetworkManager;
 import com.biglybt.core.proxy.AEProxyAddressMapper;
 import com.biglybt.core.proxy.AEProxyFactory;
 import com.biglybt.core.proxy.AEProxyFactory.PluginProxy;
@@ -167,7 +175,7 @@ import com.biglybt.net.magneturi.MagnetURIHandlerProgressListener;
 
 public class 
 I2PHelperPlugin 
-	implements UnloadablePlugin, I2PHelperAdapter
+	implements UnloadablePlugin, I2PHelperAdapter, com.biglybt.core.config.ParameterListener
 {	
 	/*
  		CHANGES REQUIRED
@@ -379,6 +387,9 @@ I2PHelperPlugin
 	private String[]				dht_addresses 	= new String[ dht_count ];
 	private String[]				dht_addresses2 	= new String[ dht_count ];
 	
+	private static final int		TOR_SERVER_PORT_BASE	= 27657;
+	private String[]				tor_hosts		= new String[ dht_count ];
+			
 	private InfoParameter			i2p_address_param;
 	private IntParameter 			int_port_param;
 	private IntParameter 			ext_port_param;
@@ -386,6 +397,9 @@ I2PHelperPlugin
 	private BooleanParameter 		socks_allow_public_param;
 	private InfoParameter 			port_info_param;
 	private InfoParameter 			http_proxy_info_param;
+	
+	private BooleanParameter		enable_tor_endpoints;
+	private InfoParameter			tor_address_param;
 
 	private int						active_int_port;
 	private int						active_ext_port;
@@ -1034,7 +1048,26 @@ I2PHelperPlugin
 						new Parameter[]{ 
 								enable_http_proxy, p_http_proxy_port, http_proxy_outproxies, http_proxy_info_param
 						});
-						
+					
+				// Tor stuff
+			
+			enable_tor_endpoints = config_model.addBooleanParameter2( "azi2phelper.tor.endpoints.enable", "azi2phelper.tor.endpoints.enable", true );
+
+			tor_address_param 	= config_model.addInfoParameter2( "azi2phelper.tor.address", getMessageText( "azi2phelper.tor.address.pending" ));
+			
+			tor_address_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
+
+			enable_tor_endpoints.addEnabledOnSelection( tor_address_param );
+			
+			ParameterGroup tor_group = 
+					config_model.createGroup( 
+						"azi2phelper.tor",
+						new Parameter[]{ 
+								enable_tor_endpoints, tor_address_param
+						});
+
+				// throttle etc
+			
 			final IntParameter 	cpu_throttle	= config_model.addIntParameter2( "azi2phelper.cpu.throttle", "azi2phelper.cpu.throttle", CPU_THROTTLE_DEFAULT, 0, 100 );
 			cpu_throttle.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
 
@@ -1128,6 +1161,7 @@ I2PHelperPlugin
 						tunnel_group,
 						socks_group,
 						http_proxy_group,
+						tor_group,
 						cpu_throttle, floodfill_param, 
 						ext_i2p_param, ext_i2p_host_param, ext_i2p_port_param, ext_i2p_http_proxy_port_param });
 			
@@ -1344,6 +1378,19 @@ I2PHelperPlugin
 			
 			if ( plugin_enabled ){
 
+				plugin_interface.addListener(
+					new PluginAdapter()
+					{
+						@Override
+						public void
+						initializationComplete()
+						{
+							plugin_interface.removeListener( this );
+							
+							AEThread2.createAndStartDaemon( "I2PHelperPlugin:async", ()->addParameterListeners());
+						}
+					});
+				
 				if ( active_http_proxy_port > 0 ){
 					
 					try{
@@ -1733,6 +1780,162 @@ I2PHelperPlugin
 			if ( e instanceof PluginException ){
 				
 				throw((PluginException)e);
+			}
+		}
+	}
+	
+	private void
+	addParameterListeners()
+	{
+		COConfigurationManager.addAndFireParameterListener( "TCP.Listen.Port", this );
+	}
+	
+	private void
+	removeParameterListeners()
+	{
+		COConfigurationManager.removeParameterListener( "TCP.Listen.Port", this );
+	}
+	
+	public void 
+	parameterChanged(
+		String name )
+	{
+		if ( name == null || name.equals( "TCP.Listen.Port" )){
+			
+			setupTor();
+		}
+	}
+	
+	public String
+	getTorHost(
+		int		dht_index )
+	{
+		return( tor_hosts[ dht_index ]);
+	}
+	
+	public int
+	getTorPort(
+		int		dht_index )
+	{
+		return( TOR_SERVER_PORT_BASE + dht_index );
+	}
+	
+	void
+	setupTor()
+	{
+		boolean status_set = false;
+		
+		try{
+			if ( enable_tor_endpoints.getValue()){
+				
+				PluginInterface tor_pi = plugin_interface.getPluginManager().getPluginInterfaceByID( "aznettor" );
+				
+				if ( tor_pi == null ){
+				
+					log( "No Tor Helper plugin, feature unavailable" );
+					
+					return;
+				}
+				
+				String version = tor_pi.getPluginVersion();
+				
+				if ( Constants.compareVersions( version, "1.2.8" ) <= 0 ){
+					
+					log( "Tor Helper plugin version must be 1.2.9 or higher" );
+					
+					return;
+				}
+				
+				if ( Constants.compareVersions( Constants.BIGLYBT_VERSION, "3.3.0.1_B14" ) <= 0 ){
+					
+					log( "Core version must be 3.3.0.1_B15 or higher" );
+					
+					return;
+				}
+				
+				String host_str = "";
+				
+				// int server_port = COConfigurationManager.getIntParameter( "TCP.Listen.Port" );
+				
+				for ( int i=0; i<dht_count; i++ ){
+					
+					int dht_index = i;
+
+					Map<String,Object>	options = new HashMap<>();
+			
+					int remote_port = getTorPort( dht_index );
+
+					int so_rcvbuf_size = COConfigurationManager.getIntParameter( "network.tcp.socket.SO_RCVBUF" );
+										
+					try{
+						VirtualServerChannelSelector selector = 
+							VirtualServerChannelSelectorFactory.createBlocking( 
+								new InetSocketAddress( 
+									InetAddress.getByName( "127.0.0.1"), remote_port ), 
+									so_rcvbuf_size,
+									new SelectListener(){
+										
+										@Override
+										public void 
+										newConnectionAccepted(
+											ServerSocketChannel server, 
+											SocketChannel 		channel)
+										{
+											try{
+												forwardTorSocket( dht_index, channel.socket(), COConfigurationManager.getIntParameter( "TCP.Listen.Port" ));
+												
+											}catch( Throwable e ){
+												
+												try{
+													channel.close();
+													
+												}catch( Throwable f ){
+												}
+											}
+										}
+									});
+						
+						selector.startProcessing();
+						
+						options.put( AEProxyFactory.SP_PORT, remote_port );
+									
+						options.put( "remote-port" /*AEProxyFactory.SP_REMOTE_PORT*/ , remote_port );
+						
+						options.put( AEProxyFactory.SP_BIND, "127.0.0.1" );
+				
+						Map<String,Object> reply =
+								AEProxyFactory.getPluginServerProxy(
+									plugin_interface.getPluginName() + ": Tor " + i,
+									AENetworkClassifier.AT_TOR,
+									plugin_interface.getPluginID() + "tor" + i,
+									options );
+						
+						if ( reply != null ){
+							
+							String host = (String)reply.get( "host" );
+									
+							tor_hosts[i] = host;	// don't need to store port, can figure out from dht index when reading values etc
+							
+							host_str += (host_str.isEmpty()?"":"\n") + tor_hosts[i] + ":" + remote_port;
+						}
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+				
+				if ( !host_str.isEmpty()){
+					
+					status_set = true;
+					
+					tor_address_param.setValue( host_str );
+				}
+			}
+		}finally{
+			
+			if ( !status_set ){
+			
+				tor_address_param.setValue( MessageText.getString( "azi2phelper.tor.disabled" ));
 			}
 		}
 	}
@@ -3935,7 +4138,7 @@ I2PHelperPlugin
 		
 		throws Exception 
 	{
-		forwardSocket( dht, i2p_socket, true, COConfigurationManager.getIntParameter( "TCP.Listen.Port" ));
+		forwardI2PSocket( dht, i2p_socket, true, COConfigurationManager.getIntParameter( "TCP.Listen.Port" ));
 	}
 	
 	@Override
@@ -3945,11 +4148,9 @@ I2PHelperPlugin
 	{
 		return( hostname_service.lookup( address ));
 	}
-	
-	private static final boolean OLD_STYLE_FORWARD = false;
-	
+		
 	private void
-	forwardSocket(
+	forwardI2PSocket(
 		I2PHelperRouterDHT			dht,
 		I2PSocket 					i2p_socket,
 		boolean						handle_maggots,
@@ -3959,16 +4160,9 @@ I2PHelperPlugin
 	{		
 		Socket bigly_socket;
 		
-		if ( OLD_STYLE_FORWARD ){
-			
-			bigly_socket = new Socket( Proxy.NO_PROXY );
-			
-		}else{
-			
-			SocketChannel channel = SocketChannel.open();
+		SocketChannel channel = SocketChannel.open();
 
-			bigly_socket = channel.socket();
-		}
+		bigly_socket = channel.socket();
 		
 		try{
 			Destination dest = i2p_socket.getPeerDestination();
@@ -4087,8 +4281,8 @@ I2PHelperPlugin
 							}
 						};
 						
-					forwardSocket( i2p_socket, bigly_socket, on_complete );
-										
+					socket_forwarder.forward( i2p_socket, bigly_socket, on_complete );
+					
 					ok = true;
 					
 				}finally{
@@ -4155,21 +4349,137 @@ I2PHelperPlugin
 		}
 	}
 	
+	final AtomicLong next_remote_onion_id = new AtomicLong( 0 );
+	
 	private void
-	forwardSocket(
-		I2PSocket	i2p_socket,
-		Socket		bigly_socket,
-		Runnable	on_complete )
-	
+	forwardTorSocket(
+		int				dht_index,
+		Socket			tor_socket,
+		int				target_port )
+			
 		throws Exception
-	{
-		//runPipe( i2p_socket.getInputStream(), bigly_socket.getOutputStream(), on_complete );
+	{		
+		Socket bigly_socket;
 		
-		//runPipe( bigly_socket.getInputStream(), i2p_socket.getOutputStream(), on_complete );
-	
-		socket_forwarder.forward( i2p_socket, bigly_socket, on_complete );
+		SocketChannel channel = SocketChannel.open();
+
+		bigly_socket = channel.socket();
+		
+		try{
+								
+			bigly_socket.bind( null );
+			
+			final int proxy_port = bigly_socket.getLocalPort();
+			
+			String local_ip		= getTorHost( dht_index );
+		
+			String remote_ip	= "remote." + next_remote_onion_id.incrementAndGet() + ".onion";	// we don't know
+			
+				// we need to pass the peer_ip to the core so that it doesn't just see '127.0.0.1'
+			
+			final AEProxyAddressMapper.PortMapping mapping = 
+					AEProxyFactory.getAddressMapper().registerPortMapping( 
+						proxy_port, 
+						tor_socket.getLocalPort(),
+						local_ip,
+						getTorPort( dht_index ),
+						remote_ip,
+						null );
+					
+			// System.out.println( "local port=" + local_port );
+			
+			boolean	ok = false;
+			
+			try{
+				InetAddress bind = NetworkAdmin.getSingleton().getSingleHomedServiceBindAddress();
+				
+				if ( bind == null || bind.isAnyLocalAddress()){
+					
+					bind = InetAddress.getByName( "127.0.0.1" );
+				}
+				
+				bigly_socket.connect( new InetSocketAddress( bind, target_port));
+			
+				bigly_socket.setTcpNoDelay( true );
+				
+				Runnable	on_complete = 
+					new Runnable()
+					{
+						private int done_count;
+						
+						@Override
+						public void
+						run()
+						{
+							synchronized( this ){
+								
+								done_count++;
+								
+								if ( done_count < 2 ){
+									
+									return;
+								}
+							}
+							
+							mapping.unregister();
+						}
+					};
+					
+				socket_forwarder.forward( tor_socket, bigly_socket, on_complete );
+									
+				ok = true;
+				
+			}finally{
+				
+				if ( !ok ){
+					
+					mapping.unregister();
+				}
+			}
+		}catch( Throwable e ){
+			
+			boolean ignore = false;
+			
+			if ( e instanceof IOException ){
+				
+				String message = Debug.getNestedExceptionMessage( e );
+				
+				if ( message != null ){
+					
+					message = message.toLowerCase( Locale.US );
+				
+					if (	message.contains( "closed" ) ||
+							message.contains( "aborted" ) ||
+							message.contains( "disconnected" ) ||
+							message.contains( "reset" ) ||
+							message.contains( "end of" )){
+			
+						ignore = true;
+					}
+				}
+			}
+			
+			if ( !ignore ){
+			
+				Debug.out( e );
+			}
+			
+			try{
+				tor_socket.close();
+				
+			}catch( Throwable f ){		
+			}
+			
+			if ( bigly_socket != null ){
+				
+				try{
+					bigly_socket.close();
+					
+				}catch( Throwable f ){
+				}
+			}
+		}
 	}
-	
 	
 	private I2PHelperTracker
 	getTracker(
@@ -4528,6 +4838,38 @@ I2PHelperPlugin
 		return( getProxy( reason, host, port, null ));
 	}
 	
+	public Map<String,Object>
+	getLocalProxyEndpoint(
+		String					host,
+		int						port,
+		Map<String,Object>		options )
+	{
+		String	local_host = null;
+		
+		if ( AENetworkClassifier.categoriseAddress( host ) == AENetworkClassifier.AT_TOR ){
+			
+			for ( int i=0;i<tor_hosts.length;i++){
+				
+				if ( getTorPort( i ) == port ){
+					
+					local_host = getTorHost(i);
+					
+					break;
+				}
+			}
+		}
+		
+		Map<String,Object> result = new HashMap<>();
+		
+		if ( local_host != null ){
+			
+			result.put( "host", local_host );
+			result.put( "port", port );
+		}
+		
+		return( result );
+	}
+	
 	public Object[]
 	getProxy(
 		String					reason,
@@ -4815,7 +5157,7 @@ I2PHelperPlugin
 								{	
 									int port = (Integer)server.getUserProperty( "port" );
 									
-									forwardSocket( null, i2p_socket, false, port );
+									forwardI2PSocket( null, i2p_socket, false, port );
 								}
 							});
 					
@@ -5520,6 +5862,8 @@ I2PHelperPlugin
 					
 					socket_forwarder = null;
 				}
+				
+				removeParameterListeners();
 			}
 		}finally{
 			

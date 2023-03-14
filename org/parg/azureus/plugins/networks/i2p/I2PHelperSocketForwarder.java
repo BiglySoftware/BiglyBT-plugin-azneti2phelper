@@ -120,7 +120,74 @@ I2PHelperSocketForwarder
 				sem.reserve();
 			}
 			
-			activity = new ForwardingActivity( i2p_socket, bigly_socket, on_complete );
+			activity = new ForwardingActivityI2P( i2p_socket, bigly_socket, on_complete );
+			
+			activities.add( activity );
+			
+			if ( tidy_event != null ){
+				
+				tidy_event.cancel();
+				
+				tidy_event = null;
+			}
+		}
+		
+		activity.start();
+	}
+	
+	protected void
+	forward(
+		Socket		tor_socket,
+		Socket		bigly_socket,
+		Runnable	on_complete )
+	
+		throws Exception
+	{
+		ForwardingActivity activity;
+		
+		synchronized( this ){
+		
+			if ( read_selector == null ){
+				
+				read_selector	 	= new VirtualChannelSelector( "I2PForwarder:read", VirtualChannelSelector.OP_READ, false );
+				
+				AESemaphore sem = new AESemaphore( "init" );
+				
+				new AEThread2( "I2PForwarder:read"){
+					
+						@Override
+						public void
+						run()
+						{
+							int	ac = activation_count;
+							
+							sem.release();
+							
+							selectLoop( ac, read_selector );
+						}
+					}.start();
+
+				write_selector 		= new VirtualChannelSelector( "I2PForwarder:write", VirtualChannelSelector.OP_WRITE, true );
+
+				new AEThread2( "I2PForwarder:write"){
+					
+						@Override
+						public void
+						run()
+						{
+							int	ac = activation_count;
+							
+							sem.release();
+							
+							selectLoop( ac, write_selector );
+						}
+					}.start();
+				
+				sem.reserve();
+				sem.reserve();
+			}
+			
+			activity = new ForwardingActivityTor( tor_socket, bigly_socket, on_complete );
 			
 			activities.add( activity );
 			
@@ -267,8 +334,24 @@ I2PHelperSocketForwarder
 		}
 	}
 	
-	class
+	interface
 	ForwardingActivity
+	{
+		public void
+		start()
+		
+			throws Exception;
+		
+		public boolean
+		timeout();
+		
+		public void
+		destroy();
+	}
+	
+	class
+	ForwardingActivityI2P
+		implements ForwardingActivity
 	{
 		final private I2PSocket		i2p_socket;
 		final private Socket		bigly_socket;
@@ -302,7 +385,7 @@ I2PHelperSocketForwarder
 		private boolean		destroyed;
 		
 		protected
-		ForwardingActivity(
+		ForwardingActivityI2P(
 			I2PSocket	_i2p_socket,
 			Socket		_bigly_socket,
 			Runnable	_on_complete )
@@ -312,7 +395,7 @@ I2PHelperSocketForwarder
 			on_complete		= _on_complete;
 		}
 		
-		void
+		public void
 		start()
 		
 			throws Exception
@@ -551,6 +634,8 @@ I2PHelperSocketForwarder
 					
 				}else{
 				
+					write_selector_registered = true;
+					
 					write_selector.register( bigly_channel, bigly_listener, null  );
 				}
 			}else{
@@ -637,7 +722,7 @@ I2PHelperSocketForwarder
 			return( read > 0 );
 		}
 		
-		private boolean
+		public boolean
 		timeout()
 		{
 			try{
@@ -675,7 +760,7 @@ I2PHelperSocketForwarder
 			destroy();
 		}
 		
-		private void
+		public void
 		destroy()
 		{
 			synchronized( lock ){
@@ -707,6 +792,439 @@ I2PHelperSocketForwarder
 			
 			try{
 				i2p_socket.close();
+				
+			}catch( Throwable e ){
+			}
+			
+			try{
+				bigly_socket.close();
+				
+			}catch( Throwable e ){
+			}
+			
+				// twice to match old implementation
+			
+			on_complete.run();
+			on_complete.run();
+			
+			destroyed( this );
+		}
+		
+		/*
+		private String
+		getString()
+		{
+			return(
+				"read=" + read_selector.isRegistered( bigly_channel ) + "/" + read_selector.isPaused( bigly_channel ) + ", " +
+				"write=" + write_selector.isRegistered( bigly_channel ) + "/" + write_selector.isPaused( bigly_channel )  + ", " +
+				"buff=" + bigly_input_buffer + "/" + bigly_output_buffer + ", " +
+				"state=" + i2p_read_active + "/" + i2p_read_deferred + "/" + i2p_read_dead + "/" + failed + "/" + destroyed );
+		}
+		*/
+	}
+	
+	class
+	ForwardingActivityTor
+		implements ForwardingActivity
+	{
+		final private Socket		tor_socket;
+		final private Socket		bigly_socket;
+		final private Runnable		on_complete;
+
+		private SocketChannel	tor_channel;
+		private SocketChannel	bigly_channel;
+		
+		private VirtualChannelSelector.VirtualSelectorListener	tor_listener; 
+		private VirtualChannelSelector.VirtualSelectorListener	bigly_listener; 
+		
+		private boolean 	bigly_write_selector_registered;
+		private boolean 	bigly_read_selector_registered;
+		private boolean 	tor_write_selector_registered;
+		private boolean 	tor_read_selector_registered;
+		
+		private volatile ByteBuffer		bigly_output_buffer;;
+		private volatile ByteBuffer		tor_output_buffer;;
+		
+		private Object		lock = new Object();
+		
+		private long		last_activity	= SystemTime.getMonotonousTime();
+		
+		private boolean		failed;
+		private boolean		destroyed;
+		
+		protected
+		ForwardingActivityTor(
+			Socket		_tor_socket,
+			Socket		_bigly_socket,
+			Runnable	_on_complete )
+		{
+			tor_socket		= _tor_socket;
+			bigly_socket 	= _bigly_socket;
+			on_complete		= _on_complete;
+		}
+		
+		public void
+		start()
+		
+			throws Exception
+		{
+			// System.out.println( "Forwarder start: " + i2p_socket.getPeerDestination());
+			
+			bigly_channel = bigly_socket.getChannel();
+			
+			bigly_channel.configureBlocking( false );
+				
+			tor_channel = tor_socket.getChannel();
+			
+			tor_channel.configureBlocking( false );
+
+			bigly_listener =
+	        	new VirtualChannelSelector.VirtualSelectorListener()
+				{
+ 	        		@Override
+			        public boolean
+					selectSuccess(
+						VirtualChannelSelector 	selector,
+						SocketChannel 			sc,
+						Object 					attachment )
+	        		{
+ 	        			last_activity	= SystemTime.getMonotonousTime();
+ 	        			
+	        			try{
+	        				if ( selector == read_selector ){
+	        					
+	        					return( readFromBigly());
+	        					
+	        				}else if ( selector == write_selector ){
+	        					
+	        					return( writeToBigly());
+	        					
+	        				}else{
+	        					
+	        					throw( new Exception( "Selector is dead" ));
+	        				}
+
+	              		}catch( Throwable e ){
+
+	            			failed( e );
+
+	            			return( false );
+	            		}
+	        		}
+
+	        		@Override
+			        public void
+					selectFailure(
+						VirtualChannelSelector 	selector,
+						SocketChannel 			sc,
+						Object 					attachment,
+						Throwable 				msg )
+	        		{
+	        			failed( msg );
+	        		}
+				};
+
+				tor_listener =
+		        	new VirtualChannelSelector.VirtualSelectorListener()
+					{
+	 	        		@Override
+				        public boolean
+						selectSuccess(
+							VirtualChannelSelector 	selector,
+							SocketChannel 			sc,
+							Object 					attachment )
+		        		{
+	 	        			last_activity	= SystemTime.getMonotonousTime();
+	 	        			
+		        			try{
+		        				if ( selector == read_selector ){
+		        					
+		        					return( readFromTor());
+		        					
+		        				}else if ( selector == write_selector ){
+		        					
+		        					return( writeToTor());
+		        					
+		        				}else{
+		        					
+		        					throw( new Exception( "Selector is dead" ));
+		        				}
+
+		              		}catch( Throwable e ){
+
+		            			failed( e );
+
+		            			return( false );
+		            		}
+		        		}
+
+		        		@Override
+				        public void
+						selectFailure(
+							VirtualChannelSelector 	selector,
+							SocketChannel 			sc,
+							Object 					attachment,
+							Throwable 				msg )
+		        		{
+		        			failed( msg );
+		        		}
+					};
+
+    			// set up read inputs
+    			
+			readFromBigly();
+			
+			readFromTor();
+		}
+	
+		protected boolean
+		writeToBigly()
+		
+			throws IOException
+		{						
+			int written = bigly_channel.write( bigly_output_buffer );
+					
+ 			//System.out.println( "bigly-write: " + written );
+
+			if ( bigly_output_buffer.hasRemaining()){
+			
+				if ( bigly_write_selector_registered ){
+					
+					write_selector.resumeSelects( bigly_channel );
+					
+				}else{
+				
+					bigly_write_selector_registered = true;
+					
+					write_selector.register( bigly_channel, bigly_listener, null  );
+				}
+			}else{
+				
+				synchronized( lock ){
+			
+					bigly_output_buffer	= null;
+					
+					readFromTor();
+				}
+			}
+			
+			return( written > 0 );
+		}
+		
+		protected boolean
+		readFromBigly()
+		
+			throws IOException
+		{
+			if ( tor_output_buffer != null ){
+				
+				Debug.out( "tor_output_buffer must be null" );
+				
+				throw( new IOException( "Inconsistent" ));
+			}
+			
+			tor_output_buffer = ByteBuffer.allocate( 32*1024 );
+			
+  			int read = bigly_channel.read( tor_output_buffer );
+  			
+ 			//System.out.println( "bigly-read: " + read );
+
+			if ( read == 0 ){
+
+				tor_output_buffer = null;
+				
+				if ( bigly_read_selector_registered ){
+					
+					read_selector.resumeSelects( bigly_channel );
+				}else{
+					
+					bigly_read_selector_registered = true;
+					
+					read_selector.register( bigly_channel, bigly_listener, null  );
+				}
+			}else if ( read > 0 ){
+				
+				read_selector.pauseSelects( bigly_channel );
+				
+				tor_output_buffer.flip();
+				
+				writeToTor();
+		
+			}else{
+				
+				throw( new IOException( "End of stream" ));
+			}
+			
+			return( read > 0 );
+		}
+		
+		protected boolean
+		writeToTor()
+		
+			throws IOException
+		{						
+			int written = tor_channel.write( tor_output_buffer );
+					
+ 			//System.out.println( "tor-write: " + written );
+ 			
+			if ( tor_output_buffer.hasRemaining()){
+			
+				if ( tor_write_selector_registered ){
+					
+					write_selector.resumeSelects( tor_channel );
+					
+				}else{
+				
+					tor_write_selector_registered = true;
+					
+					write_selector.register( tor_channel, tor_listener, null  );
+				}
+			}else{
+				
+				synchronized( lock ){
+			
+					tor_output_buffer	= null;
+					
+					readFromBigly();
+				}
+			}
+			
+			return( written > 0 );
+		}
+		
+		protected boolean
+		readFromTor()
+		
+			throws IOException
+		{
+			if ( bigly_output_buffer != null ){
+				
+				Debug.out( "bigly_output_buffer must be null" );
+				
+				throw( new IOException( "Inconsistent" ));
+			}
+			
+			bigly_output_buffer = ByteBuffer.allocate( 32*1024 );
+			
+  			int read = tor_channel.read( bigly_output_buffer );
+  			
+  			//System.out.println( "tor-read: " + read );
+  			
+			if ( read == 0 ){
+
+				bigly_output_buffer = null;
+				
+				if ( tor_read_selector_registered ){
+					
+					read_selector.resumeSelects( tor_channel );
+					
+				}else{
+					
+					tor_read_selector_registered = true;
+					
+					read_selector.register( tor_channel, tor_listener, null  );
+				}
+			}else if ( read > 0 ){
+				
+				read_selector.pauseSelects( tor_channel );
+				
+				bigly_output_buffer.flip();
+				
+				writeToBigly();
+		
+			}else{
+				
+				throw( new IOException( "End of stream" ));
+			}
+			
+			return( read > 0 );
+		}
+		
+		
+		public boolean
+		timeout()
+		{
+			try{
+				if ( tor_socket.isClosed() || bigly_socket.isClosed()){
+					
+					return( true );
+				}
+			}catch( Throwable e ){
+			}
+			
+			if ( SystemTime.getMonotonousTime() - last_activity > 2*60*1000 ){
+				
+				return( true );
+			}
+			
+			return( false );
+		}
+		
+		private void
+		failed(
+			Throwable	e )
+		{
+			//e.printStackTrace();
+			
+			synchronized( lock ){
+				
+				if ( failed ){
+					
+					return;
+				}
+				
+				failed = true;
+			}
+			
+			destroy();
+		}
+		
+		public void
+		destroy()
+		{
+			synchronized( lock ){
+				
+				if ( destroyed ){
+					
+					return;
+				}
+				
+				destroyed = true;
+			}
+			
+			// System.out.println( "Forwarder end: " + i2p_socket.getPeerDestination());
+
+
+			if ( bigly_read_selector_registered ){
+				
+				read_selector.cancel( bigly_channel );
+				
+				bigly_read_selector_registered = false;
+			}
+			
+			if ( bigly_write_selector_registered ){
+				
+				write_selector.cancel( bigly_channel );
+				
+				bigly_write_selector_registered = false;
+			}
+			
+			if ( tor_read_selector_registered ){
+				
+				read_selector.cancel( tor_channel );
+				
+				tor_read_selector_registered = false;
+			}
+			
+			if ( tor_write_selector_registered ){
+				
+				write_selector.cancel( tor_channel );
+				
+				tor_write_selector_registered = false;
+			}
+			
+			try{
+				tor_socket.close();
 				
 			}catch( Throwable e ){
 			}

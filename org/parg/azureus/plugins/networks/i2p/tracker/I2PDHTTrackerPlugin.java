@@ -23,6 +23,7 @@
 package org.parg.azureus.plugins.networks.i2p.tracker;
 
 
+import java.net.InetSocketAddress;
 import java.net.URL;
 import java.util.*;
 
@@ -36,11 +37,16 @@ import org.eclipse.swt.widgets.Text;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerStats;
+import com.biglybt.core.networkmanager.NetworkManager;
 import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.peer.PEPeerSource;
 import com.biglybt.core.util.AEMonitor;
+import com.biglybt.core.util.AENetworkClassifier;
+import com.biglybt.core.util.BDecoder;
+import com.biglybt.core.util.BEncoder;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
+import com.biglybt.core.util.SHA1Hasher;
 import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.TimeFormatter;
@@ -66,6 +72,11 @@ import com.biglybt.pif.utils.UTTimer;
 import com.biglybt.pif.utils.UTTimerEvent;
 import com.biglybt.pif.utils.UTTimerEventPerformer;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
+import com.biglybt.plugin.dht.DHTPlugin;
+import com.biglybt.plugin.dht.DHTPluginContact;
+import com.biglybt.plugin.dht.DHTPluginOperationAdapter;
+import com.biglybt.plugin.dht.DHTPluginOperationListener;
+import com.biglybt.plugin.dht.DHTPluginValue;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.components.shell.ShellFactory;
 import com.biglybt.ui.swt.views.stats.DHTOpsPanel;
@@ -1171,6 +1182,31 @@ I2PDHTTrackerPlugin
 		}
 	}
 	
+	private static final Object AZ_HASH_KEY = new Object();
+	
+	private byte[]
+	getAZHash(
+		Download		download,
+		byte[]			hash )
+	{
+		byte[] result = (byte[])download.getUserData( AZ_HASH_KEY );
+		
+		if ( result == null ){
+			
+			SHA1Hasher hasher = new SHA1Hasher();
+			
+			hasher.update( hash );
+			
+			hasher.update( "I2PDHTTrackerPlugin::AZDest".getBytes( Constants.UTF_8 ));
+			
+			result = hasher.getDigest();
+			
+			download.setUserData( AZ_HASH_KEY, result );
+		}
+
+		return( result );
+	}
+	
 	protected void
 	trackerPut(
 		final Download			download,
@@ -1187,8 +1223,6 @@ I2PDHTTrackerPlugin
 		for (int i=0;i<targets.length;i++){
 			
 			final trackerTarget target = targets[i];
-
-			int	target_type = target.getType();
 			
 		 	    // don't let a put block an announce as we don't want to be waiting for 
 		  	    // this at start of day to get a torrent running
@@ -1196,9 +1230,7 @@ I2PDHTTrackerPlugin
 		  	    // increaseActive( dl );
 	 
 			String	encoded = details.getPutDetails().getEncoded();
-			
-			byte[]	encoded_bytes = encoded.getBytes();
-			
+						
 			if ( download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
 				
 				log( download, "Registration of '" + target.getDesc() + "' skipped as metadata download");
@@ -1222,12 +1254,12 @@ I2PDHTTrackerPlugin
 						}
 					}
 					
+					byte[] hash = target.getHash();
+					
 					dht.put( 
-						target.getHash(),
+						hash,
 						"Tracker reg of '" + download.getName() + "'" + target.getDesc() + " -> " + encoded,
-						//encoded_bytes,
 						flags,
-						//false,
 						new I2PHelperDHTAdapter()
 						{
 							@Override
@@ -1244,7 +1276,66 @@ I2PDHTTrackerPlugin
 									// decreaseActive( dl );
 							}
 						});
+										
+					String tor_host = router.getPlugin().getTorHost( dht.getDHTIndex());
 					
+					String[]	networks = download.getListAttribute( ta_networks );
+					
+					boolean has_tor = false;
+					
+					for ( String net: networks ){
+						
+						if ( net == AENetworkClassifier.AT_TOR ){
+							
+							has_tor = true;
+						}
+					}
+					
+					if ( tor_host != null && has_tor ){
+					
+						int pos = tor_host.lastIndexOf( "." );
+						
+						if ( pos != -1 ){
+							
+							tor_host = tor_host.substring( 0, pos );
+						}
+						
+						Map map = new HashMap();
+						
+						byte[] thb = tor_host.getBytes( Constants.UTF_8 );
+						
+						for ( int j=0;j<thb.length;j++){
+							
+							thb[j] ^= hash[j%hash.length];
+						}
+						
+						map.put( "th", thb );
+						
+						if ( NetworkManager.REQUIRE_CRYPTO_HANDSHAKE ){
+							
+							map.put( "f", 1 );
+						}
+						
+						byte[] az_encoded = BEncoder.encode( map );
+						
+						dht.getHelperAZDHT().put( 
+							getAZHash( download, hash ),
+							"Tracker AZ reg of '" + download.getName() + "'" + target.getDesc() + " -> " + encoded,
+							az_encoded,
+							flags,
+							false,
+							new DHTPluginOperationAdapter(){
+																						
+								@Override
+								public void complete(byte[] key, boolean timeout_occurred){
+									if ( target.getType() == REG_TYPE_FULL ){
+										
+										log( 	download,
+												"AZ Registration of '" + target.getDesc(rdht) + "' completed (elapsed="	+ TimeFormatter.formatColonMillis((SystemTime.getCurrentTime() - start)) + ")");
+									}
+								}
+							});
+					}					
 				}catch( Throwable e ){					
 				}
 			}
@@ -1287,12 +1378,18 @@ I2PDHTTrackerPlugin
 			try{
 				final I2PHelperRouterDHT rdht = router.selectDHT( download );
 
-				rdht.getDHT(true).get(target.getHash(), 
+				I2PHelperDHT dht = rdht.getDHT(true);
+				
+				byte[] hash = target.getHash();
+				
+				boolean is_complete = isComplete( download );
+				
+				dht.get(
+						hash, 
 						"Tracker announce for '" + download.getName() + "'" + target.getDesc(),
-						(byte)( isComplete( download )?DHT.FLAG_SEEDING:DHT.FLAG_DOWNLOADING),
+						(byte)( is_complete?DHT.FLAG_SEEDING:DHT.FLAG_DOWNLOADING),
 						NUM_WANT, 
 						target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
-						//false, false,
 						new I2PHelperDHTAdapter()
 						{
 							List<String>	addresses 	= new ArrayList<String>();
@@ -1737,6 +1834,71 @@ I2PDHTTrackerPlugin
 								}	
 							}
 						});
+				
+				
+				String tor_host = router.getPlugin().getTorHost( dht.getDHTIndex());
+				
+				String[]	networks = download.getListAttribute( ta_networks );
+				
+				boolean has_tor = false;
+				
+				for ( String net: networks ){
+					
+					if ( net == AENetworkClassifier.AT_TOR ){
+						
+						has_tor = true;
+					}
+				}
+				
+				if ( tor_host != null && has_tor ){
+				
+					dht.getHelperAZDHT().get(
+						getAZHash(download, hash),
+						"Tracker AZ announce for '" + download.getName() + "'" + target.getDesc(),
+						is_complete?DHTPlugin.FLAG_SEEDING:DHTPlugin.FLAG_DOWNLOADING,
+						NUM_WANT,
+						target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
+						false, false,
+						new DHTPluginOperationAdapter()
+						{
+							@Override
+							public void 
+							valueRead(
+								DHTPluginContact	originator, 
+								DHTPluginValue		plugin_value )
+							{
+								byte[] value = plugin_value.getValue();
+								
+								try{
+									Map map = BDecoder.decode( value );
+									
+									byte[] thb = (byte[])map.get( "th" );
+									
+									if ( thb != null ){
+										
+										for ( int j=0;j<thb.length;j++){
+											
+											thb[j] ^= hash[j%hash.length];
+										}
+									
+										Number flags = (Number)map.get( "f" );
+										
+										boolean crypto_required = flags != null && flags.intValue() == 1;
+										
+										String th = new String( thb, Constants.UTF_8 ) + ".onion";
+									
+										int port = router.getPlugin().getTorPort( dht.getDHTIndex());
+										
+										InetSocketAddress o_address = originator.getAddress();
+										
+										System.out.println( o_address.getHostName() + ":" + o_address.getPort() + " -> " + th + ", crypto=" + crypto_required + ", port=" + port );
+									}
+									
+								}catch( Throwable e ){									
+								}
+							}
+						});
+				}
 				
 			}catch( Throwable e ){	
 				
