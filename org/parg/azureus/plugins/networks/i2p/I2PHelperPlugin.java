@@ -387,7 +387,8 @@ I2PHelperPlugin
 	private String[]				dht_addresses 	= new String[ dht_count ];
 	private String[]				dht_addresses2 	= new String[ dht_count ];
 	
-	private static final int		TOR_SERVER_PORT_BASE	= 27657;
+	private static final int		TOR_SERVER_PORT_BASE	= 27657;	// don't change this, it is used externally (well 27658 is)
+	
 	private String[]				tor_hosts		= new String[ dht_count ];
 			
 	private InfoParameter			i2p_address_param;
@@ -399,6 +400,7 @@ I2PHelperPlugin
 	private InfoParameter 			http_proxy_info_param;
 	
 	private BooleanParameter		enable_tor_endpoints;
+	private BooleanParameter		prefer_tor_peers;
 	private InfoParameter			tor_address_param;
 
 	private int						active_int_port;
@@ -1053,17 +1055,19 @@ I2PHelperPlugin
 			
 			enable_tor_endpoints = config_model.addBooleanParameter2( "azi2phelper.tor.endpoints.enable", "azi2phelper.tor.endpoints.enable", true );
 
+			prefer_tor_peers = config_model.addBooleanParameter2( "azi2phelper.tor.prefer.peers", "azi2phelper.tor.prefer.peers", false );
+
 			tor_address_param 	= config_model.addInfoParameter2( "azi2phelper.tor.address", getMessageText( "azi2phelper.tor.address.pending" ));
 			
 			tor_address_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
 
-			enable_tor_endpoints.addEnabledOnSelection( tor_address_param );
+			enable_tor_endpoints.addEnabledOnSelection( tor_address_param, prefer_tor_peers );
 			
 			ParameterGroup tor_group = 
 					config_model.createGroup( 
 						"azi2phelper.tor",
 						new Parameter[]{ 
-								enable_tor_endpoints, tor_address_param
+								enable_tor_endpoints, prefer_tor_peers, tor_address_param
 						});
 
 				// throttle etc
@@ -1820,6 +1824,12 @@ I2PHelperPlugin
 		return( TOR_SERVER_PORT_BASE + dht_index );
 	}
 	
+	public boolean
+	preferTorPeers()
+	{
+		return( prefer_tor_peers.getValue());
+	}
+	
 	void
 	setupTor()
 	{
@@ -1854,9 +1864,7 @@ I2PHelperPlugin
 				}
 				
 				String host_str = "";
-				
-				// int server_port = COConfigurationManager.getIntParameter( "TCP.Listen.Port" );
-				
+								
 				for ( int i=0; i<dht_count; i++ ){
 					
 					int dht_index = i;
@@ -1866,57 +1874,86 @@ I2PHelperPlugin
 					int remote_port = getTorPort( dht_index );
 
 					int so_rcvbuf_size = COConfigurationManager.getIntParameter( "network.tcp.socket.SO_RCVBUF" );
-										
+							
 					try{
-						VirtualServerChannelSelector selector = 
-							VirtualServerChannelSelectorFactory.createBlocking( 
-								new InetSocketAddress( 
-									InetAddress.getByName( "127.0.0.1"), remote_port ), 
-									so_rcvbuf_size,
-									new SelectListener(){
-										
-										@Override
-										public void 
-										newConnectionAccepted(
-											ServerSocketChannel server, 
-											SocketChannel 		channel)
-										{
-											try{
-												forwardTorSocket( dht_index, channel.socket(), COConfigurationManager.getIntParameter( "TCP.Listen.Port" ));
-												
-											}catch( Throwable e ){
-												
+						int local_port = remote_port;
+						
+						VirtualServerChannelSelector selector = null;
+						
+						for ( int j=0; j<10; j++ ){
+							
+							if ( j > 0 ){
+								
+								local_port = allocatePort( remote_port );
+							}
+						
+							selector = 
+								VirtualServerChannelSelectorFactory.createNonBlocking( 
+									new InetSocketAddress( 
+										InetAddress.getByName( "127.0.0.1"), local_port ), 
+										so_rcvbuf_size,
+										new SelectListener(){
+											
+											@Override
+											public void 
+											newConnectionAccepted(
+												ServerSocketChannel server, 
+												SocketChannel 		channel)
+											{
 												try{
-													channel.close();
+													forwardTorSocket( dht_index, channel.socket(), COConfigurationManager.getIntParameter( "TCP.Listen.Port" ));
 													
-												}catch( Throwable f ){
+												}catch( Throwable e ){
+													
+													try{
+														channel.close();
+														
+													}catch( Throwable f ){
+													}
 												}
 											}
-										}
-									});
+										});
 						
-						selector.startProcessing();
-						
-						options.put( AEProxyFactory.SP_PORT, remote_port );
-									
-						options.put( "remote-port" /*AEProxyFactory.SP_REMOTE_PORT*/ , remote_port );
-						
-						options.put( AEProxyFactory.SP_BIND, "127.0.0.1" );
-				
-						Map<String,Object> reply =
-								AEProxyFactory.getPluginServerProxy(
-									plugin_interface.getPluginName() + ": Tor " + i,
-									AENetworkClassifier.AT_TOR,
-									plugin_interface.getPluginID() + "tor" + i,
-									options );
-						
-						if ( reply != null ){
+							selector.startProcessing();
 							
-							String host = (String)reply.get( "host" );
-									
-							tor_hosts[i] = host;	// don't need to store port, can figure out from dht index when reading values etc
+							if ( selector.isRunning()){
+								
+								break;
+								
+							}else{
+								
+								selector.stopProcessing();
+								
+								selector = null;
+							}
+						}
+						
+						if ( selector != null ){
 							
-							host_str += (host_str.isEmpty()?"":"\n") + tor_hosts[i] + ":" + remote_port;
+							options.put( AEProxyFactory.SP_PORT, local_port );
+										
+							options.put( "remote-port" /*AEProxyFactory.SP_REMOTE_PORT*/ , remote_port );
+							
+							options.put( AEProxyFactory.SP_BIND, "127.0.0.1" );
+					
+							Map<String,Object> reply =
+									AEProxyFactory.getPluginServerProxy(
+										plugin_interface.getPluginName() + ": Tor " + i,
+										AENetworkClassifier.AT_TOR,
+										plugin_interface.getPluginID() + "tor" + i,
+										options );
+							
+							if ( reply != null ){
+								
+								String host = (String)reply.get( "host" );
+										
+								tor_hosts[i] = host;	// don't need to store port, can figure out from dht index when reading values etc
+								
+								host_str += (host_str.isEmpty()?"":"\n") + tor_hosts[i] + ":" + remote_port;
+							}
+						}else{
+							
+							log( "Failed to allocate port for Tor endpoint" );
 						}
 					}catch( Throwable e ){
 						
@@ -1938,6 +1975,42 @@ I2PHelperPlugin
 				tor_address_param.setValue( MessageText.getString( "azi2phelper.tor.disabled" ));
 			}
 		}
+	}
+	
+	private int
+	allocatePort(
+		int		def )
+	{
+		for ( int i=0;i<32;i++){
+			
+			int port = 20000 + RandomUtils.nextInt( 20000 );
+			
+			ServerSocketChannel ssc = null;
+
+			try{	
+				ssc = ServerSocketChannel.open();
+				
+				ssc.socket().bind( new InetSocketAddress( "127.0.0.1", port ));
+				
+				return( port );
+				
+			}catch( Throwable e ){
+				
+			}finally{
+				
+				if ( ssc != null ){
+					
+					try{
+						ssc.close();
+						
+					}catch( Throwable e ){
+						
+					}
+				}
+			}
+		}
+		
+		return( def );
 	}
 	
 	void
@@ -4217,7 +4290,7 @@ I2PHelperPlugin
 							proxy_port, 
 							i2p_socket.getLocalPort(),
 							local_ip,
-							i2p_socket.getPort(),
+							6881,
 							remote_ip,
 							null );
 				

@@ -1310,10 +1310,24 @@ I2PDHTTrackerPlugin
 						}
 						
 						map.put( "th", thb );
+												
+						int tor_flags = 0;
 						
 						if ( NetworkManager.REQUIRE_CRYPTO_HANDSHAKE ){
 							
-							map.put( "f", 1 );
+							tor_flags |= 0x01;
+						}
+						
+						boolean is_seed = isComplete( download );
+
+						if ( is_seed ){
+							
+							tor_flags |= 0x02;
+						}
+						
+						if ( tor_flags != 0 ){
+							
+							map.put( "f", tor_flags );
 						}
 						
 						byte[] az_encoded = BEncoder.encode( map );
@@ -1348,12 +1362,6 @@ I2PDHTTrackerPlugin
 		final RegistrationDetails		details,
 		final boolean					derived_only )
 	{
-		final 	long	start = SystemTime.getCurrentTime();
-
-		final Torrent	torrent = download.getTorrent();
-		
-		final URL	url_to_report = torrent.isDecentralised()?torrent.getAnnounceURL():DEFAULT_URL;
-
 		trackerTarget[] targets = details.getTargets( false );
 		
 		final long[]	max_retry = { 0 };
@@ -1384,457 +1392,6 @@ I2PDHTTrackerPlugin
 				
 				boolean is_complete = isComplete( download );
 				
-				dht.get(
-						hash, 
-						"Tracker announce for '" + download.getName() + "'" + target.getDesc(),
-						(byte)( is_complete?DHT.FLAG_SEEDING:DHT.FLAG_DOWNLOADING),
-						NUM_WANT, 
-						target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
-						new I2PHelperDHTAdapter()
-						{
-							List<String>	addresses 	= new ArrayList<String>();
-							List<Boolean>	is_seeds	= new ArrayList<Boolean>();
-							
-							int		seed_count;
-							int		leecher_count;
-							
-							boolean	complete;
-							
-							@Override
-							public void
-							valueRead(
-								DHTTransportContactI2P		contact,
-								String						host,
-								int							contact_state )
-							{
-								synchronized( this ){
-									
-									if ( complete ){
-										
-										return;
-									}
-	
-									try{										
-	
-										
-										addresses.add( host ); 
-										
-										if ( contact_state ==  CS_SEED ){
-												
-											is_seeds.add( new Boolean( true ));
-											
-											seed_count++;
-										}else{
-											
-											leecher_count++;
-											
-											is_seeds.add( new Boolean( false ));
-										}
-									
-									
-									}catch( Throwable e ){
-										
-										// in case we get crap back (someone spamming the DHT) just
-										// silently ignore
-									}
-								}
-							}
-		
-							@Override
-							public void
-							complete(
-								boolean		timeout )
-							{
-								synchronized( this ){
-									
-									if ( complete ){
-										
-										return;
-									}
-									
-									complete = true;
-								}
-								
-								if ( 	target.getType() == REG_TYPE_FULL ||
-										(	target.getType() == REG_TYPE_DERIVED && 
-											seed_count + leecher_count > 1 )){
-									
-									log( 	download,
-											"Get of '" + target.getDesc(rdht) + "' completed (elapsed=" + TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start)
-													+ "), addresses=" + addresses.size() + ", seeds="
-													+ seed_count + ", leechers=" + leecher_count);
-								}
-							
-								decreaseActive(download);
-								
-								int	peers_found = addresses.size();
-								
-								List<DownloadAnnounceResultPeer>	peers_for_announce = new ArrayList<DownloadAnnounceResultPeer>();
-								
-								final long	retry;
-								
-								if ( download.getFlag( Download.FLAG_METADATA_DOWNLOAD ) && peers_found < 5){
-									
-									retry = ANNOUNCE_METADATA_RETRY;
-									
-								}else{
-									
-									
-										// scale min and max based on number of active torrents
-										// we don't want more than a few announces a minute
-									
-									int	announce_per_min = 4;
-									
-									int	num_active = query_map.size();
-									
-									int	announce_min = Math.max( ANNOUNCE_MIN_DEFAULT, ( num_active / announce_per_min )*60*1000 );
-									
-									int	announce_max = derived_only?ANNOUNCE_MAX_DERIVED_ONLY:ANNOUNCE_MAX;
-									
-									announce_min = Math.min( announce_min, announce_max );
-																				
-									retry = announce_min + peers_found*(long)(announce_max-announce_min)/NUM_WANT;
-								}
-								
-								int download_state = download.getState();
-								
-								boolean	we_are_seeding = download_state == Download.ST_SEEDING;
-	
-								try{
-									this_mon.enter();
-								
-									int[] run_data = running_downloads.get( download );
-									
-									if ( run_data != null ){
-	
-										boolean full = target.getType() == REG_TYPE_FULL;
-										
-										int peer_count = we_are_seeding?leecher_count:(seed_count+leecher_count);
-										
-										run_data[1] = full?seed_count:Math.max( run_data[1], seed_count);
-										run_data[2]	= full?leecher_count:Math.max( run_data[2], leecher_count);
-										run_data[3] = full?peer_count:Math.max( run_data[3], peer_count);
-											
-										run_data[4] = (int)(SystemTime.getCurrentTime()/1000);
-										
-										long	absolute_retry = SystemTime.getCurrentTime() + retry;
-									
-										if ( absolute_retry > max_retry[0] ){
-												
-												// only update next query time if none set yet 
-												// or we appear to have set the existing one. If we
-												// don't do this then we'll overwrite any rescheduled
-												// announces
-											
-											Long	existing = (Long)query_map.get( download );
-											
-											if ( 	existing == null ||
-													existing.longValue() == max_retry[0] ){
-												
-												max_retry[0] = absolute_retry;
-										
-												query_map.put( download, new Long( absolute_retry ));
-											}
-										}
-									}						
-								}finally{
-									
-									this_mon.exit();
-								}
-															
-								putDetails put_details = details.getPutDetails();
-								
-								String	ext_address = put_details.getIPOverride();
-								
-								if ( ext_address == null ){
-										
-									try{
-										ext_address = router.selectDHT( download ).getDHT(true).getLocalAddress();
-										
-									}catch( Throwable e ){	
-										
-										ext_address = "";
-									}
-								}
-								
-								for (int i=0;i<addresses.size();i++){
-									
-										// when we are seeding ignore seeds
-									
-									if ( we_are_seeding && ((Boolean)is_seeds.get(i)).booleanValue()){
-										
-										continue;
-									}
-									
-										// remove ourselves
-									
-									String	ip = (String)addresses.get(i);
-									
-									if ( ip.equals( ext_address )){
-																			
-										continue;
-									}
-									
-									final int f_i = i;
-									
-									peers_for_announce.add(
-										new DownloadAnnounceResultPeer()
-										{
-											@Override
-											public String
-											getSource()
-											{
-												return( PEPeerSource.PS_DHT );
-											}
-											
-											@Override
-											public String
-											getAddress()
-											{
-												return((String)addresses.get(f_i));
-											}
-											
-											@Override
-											public int
-											getPort()
-											{
-												return( 6881 );
-											}
-											
-											@Override
-											public int
-											getUDPPort()
-											{
-												return( 0 );
-											}
-											
-											@Override
-											public byte[]
-											getPeerID()
-											{
-												return( null );
-											}
-											
-											@Override
-											public short
-											getProtocol()
-											{
-												return( PROTOCOL_NORMAL );
-											}
-										});
-									
-								}
-									
-								if ( target.getType() == REG_TYPE_DERIVED && peers_for_announce.size() > 0 ){
-									
-									PeerManager pm = download.getPeerManager();
-									
-									if ( pm != null ){
-											
-											// try some limited direct injection
-										
-										List<DownloadAnnounceResultPeer>	temp = new ArrayList<DownloadAnnounceResultPeer>( peers_for_announce );
-										
-										Random rand = new Random();
-										
-										for (int i=0;i<DIRECT_INJECT_PEER_MAX && temp.size() > 0; i++ ){
-											
-											DownloadAnnounceResultPeer peer = temp.remove( rand.nextInt( temp.size()));
-											
-											log( download, "Injecting derived peer " + peer.getAddress() + " into " + download.getName());
-											
-											Map<Object,Object>	user_data = new HashMap<Object,Object>();
-																					
-											user_data.put( Peer.PR_PRIORITY_CONNECTION, new Boolean( true ));
-	
-											pm.addPeer( 
-													peer.getAddress(),
-													peer.getPort(),
-													peer.getUDPPort(),
-													peer.getProtocol() == DownloadAnnounceResultPeer.PROTOCOL_CRYPT,
-													user_data );
-										}
-									}
-								}
-								
-								if ( 	download_state == Download.ST_DOWNLOADING ||
-										download_state == Download.ST_SEEDING ){
-								
-									final DownloadAnnounceResultPeer[]	peers = new DownloadAnnounceResultPeer[peers_for_announce.size()];
-									
-									peers_for_announce.toArray( peers );
-									
-									download.setAnnounceResult(
-											new DownloadAnnounceResult()
-											{
-												@Override
-												public Download
-												getDownload()
-												{
-													return( download );
-												}
-																							
-												@Override
-												public int
-												getResponseType()
-												{
-													return( DownloadAnnounceResult.RT_SUCCESS );
-												}
-																						
-												@Override
-												public int
-												getReportedPeerCount()
-												{
-													return( peers.length);
-												}
-														
-												@Override
-												public int
-												getSeedCount()
-												{
-													return( seed_count );
-												}
-												
-												@Override
-												public int
-												getNonSeedCount()
-												{
-													return( leecher_count );	
-												}
-												
-												@Override
-												public String
-												getError()
-												{
-													return( null );
-												}
-																							
-												@Override
-												public URL
-												getURL()
-												{
-													return( url_to_report );
-												}
-												
-												@Override
-												public DownloadAnnounceResultPeer[]
-												getPeers()
-												{
-													return( peers );
-												}
-												
-												@Override
-												public long
-												getTimeToWait()
-												{
-													return( retry/1000 );
-												}
-												
-												@Override
-												public Map
-												getExtensions()
-												{
-													return( null );
-												}
-											});
-								}
-									
-									// only inject the scrape result if the torrent is decentralised. If we do this for
-									// "normal" torrents then it can have unwanted side-effects, such as stopping the torrent
-									// due to ignore rules if there are no downloaders in the DHT - bthub backup, for example,
-									// isn't scrapable...
-								
-									// hmm, ok, try being a bit more relaxed about this, inject the scrape if
-									// we have any peers. 
-																	
-								boolean	inject_scrape = leecher_count > 0;
-								
-								DownloadScrapeResult result = download.getLastScrapeResult();
-																	
-								if (	result == null || 
-										result.getResponseType() == DownloadScrapeResult.RT_ERROR ){									
-		
-								}else{
-								
-										// if the currently reported values are the same as the 
-										// ones we previously injected then overwrite them
-										// note that we can't test the URL to see if we originated
-										// the scrape values as this gets replaced when a normal
-										// scrape fails :(
-										
-									int[]	prev = (int[])scrape_injection_map.get( download );
-										
-									if ( 	prev != null && 
-											prev[0] == result.getSeedCount() &&
-											prev[1] == result.getNonSeedCount()){
-																							
-										inject_scrape	= true;
-									}
-								}
-								
-								if ( torrent.isDecentralised() || inject_scrape ){
-									
-									
-										// make sure that the injected scrape values are consistent
-										// with our currently connected peers
-									
-									PeerManager	pm = download.getPeerManager();
-									
-									int	local_seeds 	= 0;
-									int	local_leechers 	= 0;
-									
-									if ( pm != null ){
-										
-										Peer[]	dl_peers = pm.getPeers();
-										
-										for (int i=0;i<dl_peers.length;i++){
-											
-											Peer	dl_peer = dl_peers[i];
-											
-											if ( dl_peer.getPercentDoneInThousandNotation() == 1000 ){
-												
-												local_seeds++;
-												
-											}else{
-												local_leechers++;
-											}
-										}							
-									}
-									
-									final int f_adj_seeds 		= Math.max( seed_count, local_seeds );
-									final int f_adj_leechers	= Math.max( leecher_count, local_leechers );
-									
-									scrape_injection_map.put( download, new int[]{ f_adj_seeds, f_adj_leechers });
-		
-									try{
-										this_mon.enter();
-									
-										int[] run_data = running_downloads.get( download );
-										
-										if ( run_data == null ){
-											
-											run_data = run_data_cache.get( download );
-										}
-										
-										if ( run_data != null ){
-	
-											run_data[1] = f_adj_seeds;
-											run_data[2]	= f_adj_leechers;
-											
-											run_data[4] = (int)(SystemTime.getCurrentTime()/1000);
-										}
-									}finally{
-										
-										this_mon.exit();
-									}
-									
-									DownloadScrapeResult sr = createOurScrapeResult( download, torrent, f_adj_seeds, f_adj_leechers, start, SystemTime.getCurrentTime() + retry );
-									
-									download.setScrapeResult( sr );
-								}	
-							}
-						});
-				
 				
 				String tor_host = router.getPlugin().getTorHost( dht.getDHTIndex());
 				
@@ -1849,8 +1406,22 @@ I2PDHTTrackerPlugin
 						has_tor = true;
 					}
 				}
+
+				boolean	secondary_get = tor_host != null && has_tor;
 				
-				if ( tor_host != null && has_tor ){
+				GetAdapter get_adapter = new GetAdapter( rdht, download, details, target, derived_only, max_retry, secondary_get );
+				
+				dht.get(
+						hash, 
+						"Tracker announce for '" + download.getName() + "'" + target.getDesc(),
+						(byte)( is_complete?DHT.FLAG_SEEDING:DHT.FLAG_DOWNLOADING),
+						NUM_WANT, 
+						target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
+						get_adapter );
+				
+				
+				
+				if ( secondary_get ){
 				
 					dht.getHelperAZDHT().get(
 						getAZHash(download, hash),
@@ -1859,45 +1430,7 @@ I2PDHTTrackerPlugin
 						NUM_WANT,
 						target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
 						false, false,
-						new DHTPluginOperationAdapter()
-						{
-							@Override
-							public void 
-							valueRead(
-								DHTPluginContact	originator, 
-								DHTPluginValue		plugin_value )
-							{
-								byte[] value = plugin_value.getValue();
-								
-								try{
-									Map map = BDecoder.decode( value );
-									
-									byte[] thb = (byte[])map.get( "th" );
-									
-									if ( thb != null ){
-										
-										for ( int j=0;j<thb.length;j++){
-											
-											thb[j] ^= hash[j%hash.length];
-										}
-									
-										Number flags = (Number)map.get( "f" );
-										
-										boolean crypto_required = flags != null && flags.intValue() == 1;
-										
-										String th = new String( thb, Constants.UTF_8 ) + ".onion";
-									
-										int port = router.getPlugin().getTorPort( dht.getDHTIndex());
-										
-										InetSocketAddress o_address = originator.getAddress();
-										
-										System.out.println( o_address.getHostName() + ":" + o_address.getPort() + " -> " + th + ", crypto=" + crypto_required + ", port=" + port );
-									}
-									
-								}catch( Throwable e ){									
-								}
-							}
-						});
+						get_adapter );
 				}
 				
 			}catch( Throwable e ){	
@@ -3163,4 +2696,632 @@ I2PDHTTrackerPlugin
 			return( "" );
 		}
 	}
+	
+	private class
+	GetAdapter
+		implements I2PHelperDHTListener, DHTPluginOperationListener
+	{
+		final 	long	start = SystemTime.getCurrentTime();
+
+		final I2PHelperRouterDHT	rdht;
+		final Download				download;
+		final RegistrationDetails	details;
+		final trackerTarget			target;
+		final boolean				derived_only;
+		final long[]				max_retry;
+		
+		final Torrent				torrent;
+		final URL					url_to_report;
+		
+		final List<Object[]>	peers 	= new ArrayList<Object[]>( NUM_WANT );
+		
+		final Map<String,Object[]>	tor_peers = new HashMap<>();
+		
+		int		seed_count;
+		int		leecher_count;
+		
+		int		complete_count;
+		
+		boolean	complete;
+		
+		private
+		GetAdapter(
+			I2PHelperRouterDHT	_rdht,
+			Download			_download,
+			RegistrationDetails	_details,
+			trackerTarget		_target,
+			boolean				_derived_only,
+			long[]				_max_retry,
+			boolean				_secondary_get )
+		{
+			rdht			= _rdht;
+			download		= _download;
+			details			= _details;
+			target			= _target;
+			derived_only	= _derived_only;
+			max_retry		= _max_retry;
+			
+			torrent = download.getTorrent();
+			
+			url_to_report = torrent.isDecentralised()?torrent.getAnnounceURL():DEFAULT_URL;
+			
+			complete_count = _secondary_get?2:1;
+		}
+		
+			// I2PHelperDHTListener methods
+		
+		@Override
+		public void 
+		searching(String host)
+		{
+		}
+		
+		@Override
+		public void
+		valueRead(
+			DHTTransportContactI2P		contact,
+			String						host,
+			int							contact_state )
+		{
+			synchronized( this ){
+				
+				if ( complete ){
+					
+					return;
+				}
+
+				try{														
+					peers.add( new Object[]{ host, 6881, contact_state==CS_SEED, false }); 
+					
+					if ( contact_state ==  CS_SEED ){
+													
+						seed_count++;
+					}else{
+						
+						leecher_count++;
+					}			
+				}catch( Throwable e ){
+					
+					// in case we get crap back (someone spamming the DHT) just
+					// silently ignore
+				}
+			}
+		}
+
+		@Override
+		public void
+		complete(
+			boolean		timeout )
+		{
+			completeSupport();
+		}
+		
+		private void
+		completeSupport()
+		{
+			int	init_peers	= peers.size();
+			int init_tor	= tor_peers.size();
+			
+			synchronized( this ){
+				
+				complete_count--;
+				
+				if ( complete_count > 0 ){
+					
+					return;
+				}
+				
+				if ( complete ){
+					
+					return;
+				}
+				
+				complete = true;
+				
+				if ( !tor_peers.isEmpty()){
+				
+					boolean prefer_tor = router.getPlugin().preferTorPeers();
+					
+					for ( int i=0; i<peers.size(); i++ ){
+						
+						Object[] peer = (Object[])peers.get(i);
+					
+						String host = (String)peer[0];
+						
+						Object[] tor_peer = tor_peers.remove( host );
+						
+						if ( tor_peer != null ){
+							
+							if ( prefer_tor ){
+													
+								peers.set( i, tor_peer );
+							}
+						}
+					}
+					
+					if ( !tor_peers.isEmpty()){
+												
+						peers.addAll( tor_peers.values());
+					}
+				}
+			}
+			
+			if ( 	target.getType() == REG_TYPE_FULL ||
+					(	target.getType() == REG_TYPE_DERIVED && 
+						seed_count + leecher_count > 1 )){
+				
+				log( 	download,
+						"Get of '" + target.getDesc(rdht) + "' completed (elapsed=" + TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start)
+								+ "), peers=" + peers.size() + " (" + init_peers + "/" + init_tor + "), seeds="
+								+ seed_count + ", leechers=" + leecher_count);
+			}
+		
+			decreaseActive(download);
+			
+			int	peers_found = peers.size();
+			
+			List<DownloadAnnounceResultPeer>	peers_for_announce = new ArrayList<DownloadAnnounceResultPeer>();
+			
+			final long	retry;
+			
+			if ( download.getFlag( Download.FLAG_METADATA_DOWNLOAD ) && peers_found < 5){
+				
+				retry = ANNOUNCE_METADATA_RETRY;
+				
+			}else{
+				
+				
+					// scale min and max based on number of active torrents
+					// we don't want more than a few announces a minute
+				
+				int	announce_per_min = 4;
+				
+				int	num_active = query_map.size();
+				
+				int	announce_min = Math.max( ANNOUNCE_MIN_DEFAULT, ( num_active / announce_per_min )*60*1000 );
+				
+				int	announce_max = derived_only?ANNOUNCE_MAX_DERIVED_ONLY:ANNOUNCE_MAX;
+				
+				announce_min = Math.min( announce_min, announce_max );
+															
+				retry = announce_min + peers_found*(long)(announce_max-announce_min)/NUM_WANT;
+			}
+			
+			int download_state = download.getState();
+			
+			boolean	we_are_seeding = download_state == Download.ST_SEEDING;
+
+			try{
+				this_mon.enter();
+			
+				int[] run_data = running_downloads.get( download );
+				
+				if ( run_data != null ){
+
+					boolean full = target.getType() == REG_TYPE_FULL;
+					
+					int peer_count = we_are_seeding?leecher_count:(seed_count+leecher_count);
+					
+					run_data[1] = full?seed_count:Math.max( run_data[1], seed_count);
+					run_data[2]	= full?leecher_count:Math.max( run_data[2], leecher_count);
+					run_data[3] = full?peer_count:Math.max( run_data[3], peer_count);
+						
+					run_data[4] = (int)(SystemTime.getCurrentTime()/1000);
+					
+					long	absolute_retry = SystemTime.getCurrentTime() + retry;
+				
+					if ( absolute_retry > max_retry[0] ){
+							
+							// only update next query time if none set yet 
+							// or we appear to have set the existing one. If we
+							// don't do this then we'll overwrite any rescheduled
+							// announces
+						
+						Long	existing = (Long)query_map.get( download );
+						
+						if ( 	existing == null ||
+								existing.longValue() == max_retry[0] ){
+							
+							max_retry[0] = absolute_retry;
+					
+							query_map.put( download, new Long( absolute_retry ));
+						}
+					}
+				}						
+			}finally{
+				
+				this_mon.exit();
+			}
+										
+			putDetails put_details = details.getPutDetails();
+			
+			String	ext_address = put_details.getIPOverride();
+			
+			if ( ext_address == null ){
+					
+				try{
+					ext_address = router.selectDHT( download ).getDHT(true).getLocalAddress();
+					
+				}catch( Throwable e ){	
+					
+					ext_address = "";
+				}
+			}
+			
+			for (int i=0;i<peers.size();i++){
+				
+				Object[] peer = peers.get(i);
+				
+				String	ip				= (String)peer[0];
+				int		port			= (Integer)peer[1];
+				boolean	is_seed			= (Boolean)peer[2];
+				boolean	crypto_required	= (Boolean)peer[3];
+				
+					// when we are seeding ignore seeds
+				
+				if ( we_are_seeding && is_seed ){
+					
+					continue;
+				}
+				
+					// remove ourselves
+								
+				if ( ip.equals( ext_address )){
+														
+					continue;
+				}
+								
+				peers_for_announce.add(
+					new DownloadAnnounceResultPeer()
+					{
+						@Override
+						public String
+						getSource()
+						{
+							return( PEPeerSource.PS_DHT );
+						}
+						
+						@Override
+						public String
+						getAddress()
+						{
+							return( ip );
+						}
+						
+						@Override
+						public int
+						getPort()
+						{
+							return( port );
+						}
+						
+						@Override
+						public int
+						getUDPPort()
+						{
+							return( 0 );
+						}
+						
+						@Override
+						public byte[]
+						getPeerID()
+						{
+							return( null );
+						}
+						
+						@Override
+						public short
+						getProtocol()
+						{
+							return( crypto_required?PROTOCOL_CRYPT:PROTOCOL_NORMAL );
+						}
+					});
+				
+			}
+				
+			if ( target.getType() == REG_TYPE_DERIVED && peers_for_announce.size() > 0 ){
+				
+				PeerManager pm = download.getPeerManager();
+				
+				if ( pm != null ){
+						
+						// try some limited direct injection
+					
+					List<DownloadAnnounceResultPeer>	temp = new ArrayList<DownloadAnnounceResultPeer>( peers_for_announce );
+					
+					Random rand = new Random();
+					
+					for (int i=0;i<DIRECT_INJECT_PEER_MAX && temp.size() > 0; i++ ){
+						
+						DownloadAnnounceResultPeer peer = temp.remove( rand.nextInt( temp.size()));
+						
+						log( download, "Injecting derived peer " + peer.getAddress() + " into " + download.getName());
+						
+						Map<Object,Object>	user_data = new HashMap<Object,Object>();
+																
+						user_data.put( Peer.PR_PRIORITY_CONNECTION, new Boolean( true ));
+
+						pm.addPeer( 
+								peer.getAddress(),
+								peer.getPort(),
+								peer.getUDPPort(),
+								peer.getProtocol() == DownloadAnnounceResultPeer.PROTOCOL_CRYPT,
+								user_data );
+					}
+				}
+			}
+			
+			if ( 	download_state == Download.ST_DOWNLOADING ||
+					download_state == Download.ST_SEEDING ){
+			
+				final DownloadAnnounceResultPeer[]	peers = new DownloadAnnounceResultPeer[peers_for_announce.size()];
+				
+				peers_for_announce.toArray( peers );
+				
+				download.setAnnounceResult(
+						new DownloadAnnounceResult()
+						{
+							@Override
+							public Download
+							getDownload()
+							{
+								return( download );
+							}
+																		
+							@Override
+							public int
+							getResponseType()
+							{
+								return( DownloadAnnounceResult.RT_SUCCESS );
+							}
+																	
+							@Override
+							public int
+							getReportedPeerCount()
+							{
+								return( peers.length);
+							}
+									
+							@Override
+							public int
+							getSeedCount()
+							{
+								return( seed_count );
+							}
+							
+							@Override
+							public int
+							getNonSeedCount()
+							{
+								return( leecher_count );	
+							}
+							
+							@Override
+							public String
+							getError()
+							{
+								return( null );
+							}
+																		
+							@Override
+							public URL
+							getURL()
+							{
+								return( url_to_report );
+							}
+							
+							@Override
+							public DownloadAnnounceResultPeer[]
+							getPeers()
+							{
+								return( peers );
+							}
+							
+							@Override
+							public long
+							getTimeToWait()
+							{
+								return( retry/1000 );
+							}
+							
+							@Override
+							public Map
+							getExtensions()
+							{
+								return( null );
+							}
+						});
+			}
+				
+				// only inject the scrape result if the torrent is decentralised. If we do this for
+				// "normal" torrents then it can have unwanted side-effects, such as stopping the torrent
+				// due to ignore rules if there are no downloaders in the DHT - bthub backup, for example,
+				// isn't scrapable...
+			
+				// hmm, ok, try being a bit more relaxed about this, inject the scrape if
+				// we have any peers. 
+												
+			boolean	inject_scrape = leecher_count > 0;
+			
+			DownloadScrapeResult result = download.getLastScrapeResult();
+												
+			if (	result == null || 
+					result.getResponseType() == DownloadScrapeResult.RT_ERROR ){									
+
+			}else{
+			
+					// if the currently reported values are the same as the 
+					// ones we previously injected then overwrite them
+					// note that we can't test the URL to see if we originated
+					// the scrape values as this gets replaced when a normal
+					// scrape fails :(
+					
+				int[]	prev = (int[])scrape_injection_map.get( download );
+					
+				if ( 	prev != null && 
+						prev[0] == result.getSeedCount() &&
+						prev[1] == result.getNonSeedCount()){
+																		
+					inject_scrape	= true;
+				}
+			}
+			
+			if ( torrent.isDecentralised() || inject_scrape ){
+				
+				
+					// make sure that the injected scrape values are consistent
+					// with our currently connected peers
+				
+				PeerManager	pm = download.getPeerManager();
+				
+				int	local_seeds 	= 0;
+				int	local_leechers 	= 0;
+				
+				if ( pm != null ){
+					
+					Peer[]	dl_peers = pm.getPeers();
+					
+					for (int i=0;i<dl_peers.length;i++){
+						
+						Peer	dl_peer = dl_peers[i];
+						
+						if ( dl_peer.getPercentDoneInThousandNotation() == 1000 ){
+							
+							local_seeds++;
+							
+						}else{
+							local_leechers++;
+						}
+					}							
+				}
+				
+				final int f_adj_seeds 		= Math.max( seed_count, local_seeds );
+				final int f_adj_leechers	= Math.max( leecher_count, local_leechers );
+				
+				scrape_injection_map.put( download, new int[]{ f_adj_seeds, f_adj_leechers });
+
+				try{
+					this_mon.enter();
+				
+					int[] run_data = running_downloads.get( download );
+					
+					if ( run_data == null ){
+						
+						run_data = run_data_cache.get( download );
+					}
+					
+					if ( run_data != null ){
+
+						run_data[1] = f_adj_seeds;
+						run_data[2]	= f_adj_leechers;
+						
+						run_data[4] = (int)(SystemTime.getCurrentTime()/1000);
+					}
+				}finally{
+					
+					this_mon.exit();
+				}
+				
+				DownloadScrapeResult sr = createOurScrapeResult( download, torrent, f_adj_seeds, f_adj_leechers, start, SystemTime.getCurrentTime() + retry );
+				
+				download.setScrapeResult( sr );
+			}	
+		}
+		
+			// DHTPluginOperationListener methods
+		
+		@Override
+		public void
+		starts(
+			byte[]				key )
+		{
+		}
+
+		@Override
+		public boolean
+		diversified()
+		{
+			return( true );
+		}
+		
+		@Override
+		public void 
+		valueRead(
+			DHTPluginContact	originator, 
+			DHTPluginValue		plugin_value )
+		{
+			byte[] value = plugin_value.getValue();
+			
+			byte[] hash = target.getHash();
+			
+			String our_tor_host = router.getPlugin().getTorHost( rdht.getDHTIndex());
+			
+			try{
+				Map map = BDecoder.decode( value );
+				
+				byte[] thb = (byte[])map.get( "th" );
+				
+				if ( thb != null ){
+					
+					for ( int j=0;j<thb.length;j++){
+						
+						thb[j] ^= hash[j%hash.length];
+					}
+				
+					boolean crypto_required	= false;
+					boolean is_seed			= false;
+					
+					Number n_flags = (Number)map.get( "f" );
+					
+					if ( n_flags != null ){
+						
+						int flags = n_flags.intValue();
+						
+						crypto_required = (flags&0x01) != 0;
+						is_seed			= (flags&0x02) != 0;
+					}
+					
+					String th = new String( thb, Constants.UTF_8 ) + ".onion";
+				
+					if ( !th.equals( our_tor_host )){
+											
+						int port = router.getPlugin().getTorPort( rdht.getDHTIndex());
+						
+						InetSocketAddress o_address = originator.getAddress();
+						
+						//System.out.println( o_address.getHostName() + ":" + o_address.getPort() + " -> " + th + ", seed=" + is_seed + ", crypto=" + crypto_required + ", port=" + port );
+						
+						synchronized( this ){
+							
+							if ( complete ){
+								
+								return;
+							}
+							
+							tor_peers.put( o_address.getHostName(), new Object[]{ th, port, is_seed, crypto_required });
+						}
+					}
+				}
+				
+			}catch( Throwable e ){									
+			}
+		}
+		
+		@Override
+		public void
+		valueWritten(
+			DHTPluginContact	target,
+			DHTPluginValue		value )
+		{
+		}
+
+		@Override
+		public void
+		complete(
+			byte[]				key,
+			boolean				timeout_occurred )
+		{
+			completeSupport();
+		}
+	};
 }

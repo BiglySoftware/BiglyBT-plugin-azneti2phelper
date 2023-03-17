@@ -265,7 +265,7 @@ I2PHelperMessageHandler
 								
 									SocketChannel chan = ep.getSocketChannel();
 									
-									if ( !plugin.checkMixState( (InetSocketAddress)chan.socket().getRemoteSocketAddress(), torrent_hash )){
+									if ( chan != null && !plugin.checkMixState( (InetSocketAddress)chan.socket().getRemoteSocketAddress(), torrent_hash )){
 										
 										throw( new RuntimeException( "Incorrect mix" ));
 									}
