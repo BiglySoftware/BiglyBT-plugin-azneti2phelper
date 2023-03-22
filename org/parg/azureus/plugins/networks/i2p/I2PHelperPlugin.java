@@ -1072,6 +1072,11 @@ I2PHelperPlugin
 
 				// throttle etc
 			
+			if ( Constants.compareVersions( Constants.getCurrentVersion(), "3.3.0.1_B14" ) <= 0 ){
+
+				tor_group.setVisible( false );
+			}
+			
 			final IntParameter 	cpu_throttle	= config_model.addIntParameter2( "azi2phelper.cpu.throttle", "azi2phelper.cpu.throttle", CPU_THROTTLE_DEFAULT, 0, 100 );
 			cpu_throttle.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
 
@@ -1842,7 +1847,10 @@ I2PHelperPlugin
 				
 				if ( tor_pi == null ){
 				
-					log( "No Tor Helper plugin, feature unavailable" );
+					if ( Constants.isCVSVersion()){
+						
+						log( "No Tor Helper plugin, feature unavailable" );
+					}
 					
 					return;
 				}
@@ -1851,14 +1859,20 @@ I2PHelperPlugin
 				
 				if ( Constants.compareVersions( version, "1.2.8" ) <= 0 ){
 					
-					log( "Tor Helper plugin version must be 1.2.9 or higher" );
+					if ( Constants.isCVSVersion()){
+					
+						log( "Tor Helper plugin version must be 1.2.9 or higher" );
+					}
 					
 					return;
 				}
 				
-				if ( Constants.compareVersions( Constants.BIGLYBT_VERSION, "3.3.0.1_B14" ) <= 0 ){
+				if ( Constants.compareVersions( Constants.getCurrentVersion(), "3.3.0.1_B14" ) <= 0 ){
 					
-					log( "Core version must be 3.3.0.1_B15 or higher" );
+					if ( Constants.isCVSVersion()){
+					
+						log( "Core version must be 3.3.0.1_B15 or higher" );
+					}
 					
 					return;
 				}
@@ -1914,6 +1928,12 @@ I2PHelperPlugin
 											}
 										});
 						
+							try{
+								selector.setAlertOnFail( false );
+								
+							}catch( Throwable e ){	
+							}
+							
 							selector.startProcessing();
 							
 							if ( selector.isRunning()){
