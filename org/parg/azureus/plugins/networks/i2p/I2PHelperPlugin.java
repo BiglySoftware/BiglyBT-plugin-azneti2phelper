@@ -437,7 +437,8 @@ I2PHelperPlugin
 	
 	private TimerEventPeriodic			timer_event;
 	
-	private I2PHelperAltNetHandler		alt_network_handler;
+	private I2PHelperAltNetHandlerI2P		alt_network_handler_i2p;
+	private I2PHelperAltNetHandlerTor		alt_network_handler_tor;
 	
 	private I2PHelperNetworkMixer		network_mixer;
 	
@@ -1548,7 +1549,8 @@ I2PHelperPlugin
 							}
 						});
 				
-				alt_network_handler = new I2PHelperAltNetHandler();
+				alt_network_handler_i2p = new I2PHelperAltNetHandlerI2P();
+				alt_network_handler_tor = new I2PHelperAltNetHandlerTor();
 				
 				plugin_interface.addListener(
 					new PluginAdapter()
@@ -1970,6 +1972,18 @@ I2PHelperPlugin
 								tor_hosts[i] = host;	// don't need to store port, can figure out from dht index when reading values etc
 								
 								host_str += (host_str.isEmpty()?"":"\n") + tor_hosts[i] + ":" + remote_port;
+								
+								if ( dht_index == 0 ){
+									
+									I2PHelperAltNetHandlerTor anh = alt_network_handler_tor;
+									
+									if ( anh != null ){
+										
+										anh.contactAlive( 
+											InetSocketAddress.createUnresolved( host, remote_port ),
+											true );
+									}
+								}
 							}
 						}else{
 							
@@ -3139,7 +3153,7 @@ I2PHelperPlugin
 	{
 		if ( dht.getDHTIndex() == I2PHelperRouter.DHT_MIX ){
 			
-			I2PHelperAltNetHandler net = alt_network_handler;
+			I2PHelperAltNetHandlerI2P net = alt_network_handler_i2p;
 			
 			if ( net != null ){
 				
@@ -3847,7 +3861,7 @@ I2PHelperPlugin
 					
 					adapter.tryExternalBootstrap( dht, true );
 					
-				}else if ( cmd.equals( "alt_net" )){
+				}else if ( cmd.equals( "alt_i2p" )){
 
 					List<DHTTransportAlternativeContact> contacts = DHTUDPUtils.getAlternativeContacts( DHTTransportAlternativeNetwork.AT_I2P, 16 );
 					
@@ -3857,7 +3871,19 @@ I2PHelperPlugin
 						
 						System.out.println( c.getAge());
 						
-						System.out.println( "    " + c.getProperties() + " -> " + plugin_maybe_null.alt_network_handler.decodeContact( c ));
+						System.out.println( "    " + c.getProperties() + " -> " + plugin_maybe_null.alt_network_handler_i2p.decodeContact( c ));
+					}
+				}else if ( cmd.equals( "alt_tor" )){
+
+					List<DHTTransportAlternativeContact> contacts = DHTUDPUtils.getAlternativeContacts( DHTTransportAlternativeNetwork.AT_TOR, 16 );
+					
+					System.out.println( "alt_contacts=" + contacts.size());
+					
+					for ( DHTTransportAlternativeContact c: contacts ){
+						
+						System.out.println( c.getAge());
+						
+						System.out.println( "    " + c.getProperties() + " -> " + plugin_maybe_null.alt_network_handler_tor.decodeContact( c ));
 					}
 				}else if ( cmd.equals( "bridge_put" )){
 
@@ -3882,10 +3908,10 @@ I2PHelperPlugin
 		
 	@Override
 	public List<NodeInfo>
-	getAlternativeContacts(
+	getAlternativeContactsI2P(
 		int				max )
 	{
-		I2PHelperAltNetHandler anh = alt_network_handler;
+		I2PHelperAltNetHandlerI2P anh = alt_network_handler_i2p;
 		
 		List<NodeInfo> result = new ArrayList<NodeInfo>();
 		
@@ -3996,7 +4022,7 @@ I2PHelperPlugin
 				}
 			}
 		}else{
-			I2PHelperAltNetHandler anh = alt_network_handler;
+			I2PHelperAltNetHandlerI2P anh = alt_network_handler_i2p;
 			
 			if ( anh != null ){
 				
@@ -5921,11 +5947,18 @@ I2PHelperPlugin
 					uri_handler.removeListener( magnet_handler );
 				}
 				
-				if ( alt_network_handler != null ){
+				if ( alt_network_handler_i2p != null ){
 					
-					alt_network_handler.destroy();
+					alt_network_handler_i2p.destroy();
 					
-					alt_network_handler = null;
+					alt_network_handler_i2p = null;
+				}
+				
+				if ( alt_network_handler_tor != null ){
+					
+					alt_network_handler_tor.destroy();
+					
+					alt_network_handler_tor = null;
 				}
 				
 				if ( message_handler != null ){
@@ -6223,7 +6256,7 @@ outer:
 				
 				@Override
 				public List<NodeInfo> 
-				getAlternativeContacts(int max) 
+				getAlternativeContactsI2P(int max) 
 				{
 					return( new ArrayList<NodeInfo>());
 				}

@@ -60,7 +60,7 @@ I2PHelperAdapter
 		boolean			force );
 	
 	public List<NodeInfo>
-	getAlternativeContacts(
+	getAlternativeContactsI2P(
 		int				max );
 	
 	public void

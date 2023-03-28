@@ -1160,7 +1160,7 @@ DHTI2P
         		
 	        		// alt contacts are cheap, throw in a ping if we can
 	        	
-	        	List<NodeInfo> alts = adapter.getAlternativeContacts( 5 - live_node_count );
+	        	List<NodeInfo> alts = adapter.getAlternativeContactsI2P( 5 - live_node_count );
 	        	
 	        	for ( NodeInfo alt: alts ){
 	        		

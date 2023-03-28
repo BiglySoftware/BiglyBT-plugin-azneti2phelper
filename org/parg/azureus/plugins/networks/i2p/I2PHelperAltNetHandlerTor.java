@@ -22,6 +22,7 @@
 
 package org.parg.azureus.plugins.networks.i2p;
 
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -29,67 +30,44 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
-import net.i2p.data.Destination;
-
+import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.SystemTime;
-import org.parg.azureus.plugins.networks.i2p.snarkdht.NID;
-import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
-import org.parg.azureus.plugins.networks.i2p.vuzedht.DHTTransportContactI2P;
 
 import com.biglybt.core.dht.transport.DHTTransportAlternativeContact;
 import com.biglybt.core.dht.transport.DHTTransportAlternativeNetwork;
 import com.biglybt.core.dht.transport.udp.impl.DHTUDPUtils;
 
 public class 
-I2PHelperAltNetHandler 
+I2PHelperAltNetHandlerTor 
 {
-	private DHTTransportAlternativeNetworkImpl		i2p_net = new DHTTransportAlternativeNetworkImpl( DHTTransportAlternativeNetwork.AT_I2P );
+	private DHTTransportAlternativeNetworkImpl		tor_net = new DHTTransportAlternativeNetworkImpl( 6 ); // replace sometime after 3.4 DHTTransportAlternativeNetwork.AT_TOR );
 	
 	protected
-	I2PHelperAltNetHandler()
+	I2PHelperAltNetHandlerTor()
 	{
-		DHTUDPUtils.registerAlternativeNetwork( i2p_net );
+		DHTUDPUtils.registerAlternativeNetwork( tor_net );
 	}
 	
 	protected void
 	contactAlive(
-		DHTTransportContactI2P	contact )
+		InetSocketAddress	contact,
+		boolean				is_local )
 	{
-		NodeInfo node_info = contact.getNode();
-		
-		if ( node_info.getDestination() != null && node_info.getNID() != null ){
-		
-			i2p_net.addContact( node_info );
-		}
+		tor_net.addContact( contact, is_local );
 	}
 	
-	public NodeInfo
+	public InetSocketAddress
 	decodeContact(
 		DHTTransportAlternativeContact		contact )
 	{
 		try{
 			Map<String,Object>	map = contact.getProperties();
 			
-	    	byte[]	nid_bytes 	= (byte[])map.get( "n" );
-	    	byte[]	dest_bytes	= (byte[])map.get( "d" );
-
-	    	if ( !map.containsKey( "p" )){
-	    		
-	    		return( null );
-	    	}
-	    	
+	    	byte[]	host_bytes 	= (byte[])map.get( "h" );	    	
 	    	int		port 		= ((Number)map.get( "p" )).intValue();
 
-	    	NID nid = new NID( nid_bytes );
-	    	
-	    	Destination destination = new Destination();
-	    
-	    	destination.fromByteArray( dest_bytes );
-	    	
-	    	NodeInfo ni = new NodeInfo( nid, destination, port );
-
-	    	return( ni );
+	    	return( InetSocketAddress.createUnresolved( new String( host_bytes, Constants.UTF_8 ), port ));
 	    	
 		}catch( Throwable e ){
 			
@@ -100,7 +78,7 @@ I2PHelperAltNetHandler
 	protected void
 	destroy()
 	{
-		DHTUDPUtils.unregisterAlternativeNetwork( i2p_net );
+		DHTUDPUtils.unregisterAlternativeNetwork( tor_net );
 	}
 	
 	private static class
@@ -129,11 +107,12 @@ I2PHelperAltNetHandler
 		
 		private void
 		addContact(
-			NodeInfo	node_info )
+			InetSocketAddress	address,
+			boolean				is_local )
 		{
 			synchronized( address_history ){
 				
-				address_history.addFirst(new Object[]{  node_info, new Long( SystemTime.getMonotonousTime())});
+				address_history.addFirst(new Object[]{  address, is_local?-1L:new Long( SystemTime.getMonotonousTime())});
 				
 				if ( address_history.size() > ADDRESS_HISTORY_MAX ){
 					
@@ -153,7 +132,7 @@ I2PHelperAltNetHandler
 				
 				for ( Object[] entry: address_history ){
 					
-					result.add( new DHTTransportAlternativeContactImpl((NodeInfo)entry[0],(Long)entry[1]));
+					result.add( new DHTTransportAlternativeContactImpl((InetSocketAddress)entry[0],(Long)entry[1]));
 					
 					if ( result.size() == max ){
 						
@@ -169,24 +148,24 @@ I2PHelperAltNetHandler
 		DHTTransportAlternativeContactImpl
 			implements DHTTransportAlternativeContact
 		{
-			private final NodeInfo		node_info;
-			private final int	 		seen_secs;
-			private final int	 		id;
+			private final InetSocketAddress	address;
+			private final int	 			seen_secs;
+			private final int	 			id;
 			
 			private
 			DHTTransportAlternativeContactImpl(
-				NodeInfo		_node_info,
-				long			seen )
+				InetSocketAddress	_address,
+				long				seen )
 			{
-				node_info	= _node_info;
+				address		= _address;
 				
-				seen_secs = (int)( seen/1000 );				
+				seen_secs	= seen<0?-1:(int)( seen/1000 );				
 			
 				int	_id;
 				
 				try{
 				
-					_id = Arrays.hashCode( node_info.getDestination().toByteArray());
+					_id = Arrays.hashCode( address.getHostString().getBytes( Constants.UTF_8 ));
 					
 				}catch( Throwable e ){
 					
@@ -223,14 +202,28 @@ I2PHelperAltNetHandler
 			public int
 			getLastAlive()
 			{
-				return( seen_secs );
+				if ( seen_secs < 0 ){
+					
+					return((int)(SystemTime.getMonotonousTime()/1000));
+							
+				}else{
+					
+					return( seen_secs );
+				}
 			}
 			
 			@Override
 			public int
 			getAge()
 			{
-				return(((int)( SystemTime.getMonotonousTime()/1000)) - seen_secs );
+				if ( seen_secs < 0 ){
+					
+					return( 0 );
+					
+				}else{
+					
+					return(((int)( SystemTime.getMonotonousTime()/1000)) - seen_secs );
+				}
 			}
 			
 			@Override
@@ -239,14 +232,9 @@ I2PHelperAltNetHandler
 			{
 				Map<String,Object>	properties = new HashMap<String, Object>();
 				
-				try{
-					byte[]		nid	 = node_info.getNID().getData();
-					int			port = node_info.getPort();
-					byte[]		dest = node_info.getDestination().toByteArray();
-					
-					properties.put( "n", nid );
-					properties.put( "p", port );
-					properties.put( "d", dest );	
+				try{			
+					properties.put( "h", address.getHostString().getBytes( Constants.UTF_8 ));
+					properties.put( "p", address.getPort());
 					
 				}catch( Throwable e ){
 					

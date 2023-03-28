@@ -129,8 +129,8 @@ DHTBG
 		
 		if ( enable_alt_contacts ){
 			
-			ipv4_net = new DHTTransportAlternativeNetworkImpl( 4 ); // FIX ME POST 2203 DHTTransportAlternativeNetwork.AT_BIGLYBT_IPV4 );
-			ipv6_net = new DHTTransportAlternativeNetworkImpl( 5 ); // FIX ME POST 2203 DHTTransportAlternativeNetwork.AT_BIGLYBT_IPV6 );
+			ipv4_net = new DHTTransportAlternativeNetworkImpl( DHTTransportAlternativeNetwork.AT_BIGLYBT_IPV4 );
+			ipv6_net = new DHTTransportAlternativeNetworkImpl( DHTTransportAlternativeNetwork.AT_BIGLYBT_IPV6 );
 
 			DHTUDPUtils.registerAlternativeNetwork( ipv4_net );
 			DHTUDPUtils.registerAlternativeNetwork( ipv6_net );
