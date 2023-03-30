@@ -31,6 +31,7 @@ import java.util.Map;
 
 import net.i2p.data.Destination;
 
+import com.biglybt.core.util.BEncoder;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.SystemTime;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NID;
@@ -186,7 +187,7 @@ I2PHelperAltNetHandlerI2P
 				
 				try{
 				
-					_id = Arrays.hashCode( node_info.getDestination().toByteArray());
+					_id = Arrays.hashCode( BEncoder.encode( getProperties()));
 					
 				}catch( Throwable e ){
 					

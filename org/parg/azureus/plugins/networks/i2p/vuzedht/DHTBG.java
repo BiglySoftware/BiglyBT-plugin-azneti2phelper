@@ -387,7 +387,7 @@ DHTBG
 							DHTTransportAlternativeContact o1,
 							DHTTransportAlternativeContact o2) 
 						{
-							int res = o1.getAge() - o2.getAge();
+							int res = o2.getLastAlive() - o1.getLastAlive();
 
 							if (res == 0) {
 
@@ -550,8 +550,7 @@ DHTBG
 		{
 			private final int					version;
 			private final Map<String,Object>	properties;
-			private final int					start_secs;
-			private final long	 				start_time;
+			private final int					seen_secs;
 			private final int	 				id;
 			
 			private
@@ -563,8 +562,7 @@ DHTBG
 				version		= _version;
 				properties	= _properties;
 				
-				start_secs	= _age_secs;
-				start_time 	= SystemTime.getMonotonousTime();
+				seen_secs 	= (int)( SystemTime.getMonotonousTime()/1000) - (_age_secs<0?Short.MAX_VALUE:_age_secs);
 				
 				int	_id;
 				
@@ -607,14 +605,14 @@ DHTBG
 			public int
 			getLastAlive()
 			{
-				return( 0 );	// deprecated
+				return( seen_secs );
 			}
 			
 			@Override
 			public int
 			getAge()
 			{
-				return(start_secs + (int)((SystemTime.getMonotonousTime() - start_time )/1000 ));
+				return((int)(SystemTime.getMonotonousTime()/1000) - seen_secs );
 			}
 			
 			@Override

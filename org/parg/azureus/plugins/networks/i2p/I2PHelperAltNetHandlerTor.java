@@ -28,10 +28,14 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
+import com.biglybt.core.util.BEncoder;
+import com.biglybt.core.util.Base32;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
+import com.biglybt.core.util.RandomUtils;
 import com.biglybt.core.util.SystemTime;
 
 import com.biglybt.core.dht.transport.DHTTransportAlternativeContact;
@@ -57,7 +61,38 @@ I2PHelperAltNetHandlerTor
 		tor_net.addContact( contact, is_local );
 	}
 	
-	public InetSocketAddress
+	private static byte[]
+	hostnameToBytes(
+		String	host_name )
+	{
+		byte[] bytes = Base32.decode( host_name.substring( 0, host_name.indexOf( "." )));
+		
+			// v3 onion host names are always 35 bytes (32 from 512 bit key, 1 version, 2 checksum)
+		
+		if ( bytes.length != 35 ){
+			
+			Debug.out( "Hmm, " + host_name + " -> " + bytes.length );
+		}
+		
+		return( bytes );
+	}
+	
+	private static String
+	bytesToHostname(
+		byte[]		bytes )
+	{
+		if ( bytes.length == 35 ){
+			
+			return( Base32.encode(bytes).toLowerCase( Locale.US ) + ".onion" );
+			
+		}else{
+				// migration
+			
+			return( new String( bytes, Constants.UTF_8 ));
+		}
+	}
+	
+	public static InetSocketAddress
 	decodeContact(
 		DHTTransportAlternativeContact		contact )
 	{
@@ -67,7 +102,9 @@ I2PHelperAltNetHandlerTor
 	    	byte[]	host_bytes 	= (byte[])map.get( "h" );	    	
 	    	int		port 		= ((Number)map.get( "p" )).intValue();
 
-	    	return( InetSocketAddress.createUnresolved( new String( host_bytes, Constants.UTF_8 ), port ));
+	    	String host = bytesToHostname( host_bytes );
+	
+	    	return( InetSocketAddress.createUnresolved( host, port ));
 	    	
 		}catch( Throwable e ){
 			
@@ -105,6 +142,13 @@ I2PHelperAltNetHandlerTor
 			return( network );
 		}
 		
+		public InetSocketAddress 
+		getNotionalAddress(
+			DHTTransportAlternativeContact contact )
+		{
+			return( decodeContact( contact ));
+		}
+		
 		private void
 		addContact(
 			InetSocketAddress	address,
@@ -116,7 +160,16 @@ I2PHelperAltNetHandlerTor
 				
 				if ( address_history.size() > ADDRESS_HISTORY_MAX ){
 					
-					address_history.removeLast();
+					Object[] entry = address_history.removeLast();
+					
+						// keep local contact around
+					
+					if (((Long)entry[1]) == -1 ){
+						
+						address_history.removeLast();
+						
+						address_history.addFirst( entry );
+					}
 				}
 			}
 		}
@@ -131,6 +184,9 @@ I2PHelperAltNetHandlerTor
 			synchronized( address_history ){
 				
 				for ( Object[] entry: address_history ){
+					
+						// important that we create a new contact here as the age of local contacts
+						// is maintained as roughly "now"
 					
 					result.add( new DHTTransportAlternativeContactImpl((InetSocketAddress)entry[0],(Long)entry[1]));
 					
@@ -159,13 +215,22 @@ I2PHelperAltNetHandlerTor
 			{
 				address		= _address;
 				
-				seen_secs	= seen<0?-1:(int)( seen/1000 );				
-			
+				if ( seen < 0 ){
+					
+						// local
+					
+					seen_secs = (int)( SystemTime.getMonotonousTime()/1000) - RandomUtils.nextInt( 60 );
+					
+				}else{
+				
+					seen_secs	= (int)( seen/1000 );				
+				}
+				
 				int	_id;
 				
 				try{
 				
-					_id = Arrays.hashCode( address.getHostString().getBytes( Constants.UTF_8 ));
+					_id = Arrays.hashCode( BEncoder.encode( getProperties()));
 					
 				}catch( Throwable e ){
 					
@@ -202,28 +267,14 @@ I2PHelperAltNetHandlerTor
 			public int
 			getLastAlive()
 			{
-				if ( seen_secs < 0 ){
-					
-					return((int)(SystemTime.getMonotonousTime()/1000));
-							
-				}else{
-					
-					return( seen_secs );
-				}
+				return( seen_secs );
 			}
 			
 			@Override
 			public int
 			getAge()
 			{
-				if ( seen_secs < 0 ){
-					
-					return( 0 );
-					
-				}else{
-					
-					return(((int)( SystemTime.getMonotonousTime()/1000)) - seen_secs );
-				}
+				return(((int)( SystemTime.getMonotonousTime()/1000)) - seen_secs );
 			}
 			
 			@Override
@@ -232,8 +283,10 @@ I2PHelperAltNetHandlerTor
 			{
 				Map<String,Object>	properties = new HashMap<String, Object>();
 				
-				try{			
-					properties.put( "h", address.getHostString().getBytes( Constants.UTF_8 ));
+				try{
+					String host = address.getHostString();
+										
+					properties.put( "h", hostnameToBytes( host ));
 					properties.put( "p", address.getPort());
 					
 				}catch( Throwable e ){

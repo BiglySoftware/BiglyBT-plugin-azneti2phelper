@@ -153,8 +153,6 @@ import com.biglybt.core.networkmanager.VirtualServerChannelSelector;
 import com.biglybt.core.networkmanager.VirtualServerChannelSelector.SelectListener;
 import com.biglybt.core.networkmanager.VirtualServerChannelSelectorFactory;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
-import com.biglybt.core.networkmanager.impl.tcp.IncomingSocketChannelManager;
-import com.biglybt.core.networkmanager.impl.tcp.TCPNetworkManager;
 import com.biglybt.core.proxy.AEProxyAddressMapper;
 import com.biglybt.core.proxy.AEProxyFactory;
 import com.biglybt.core.proxy.AEProxyFactory.PluginProxy;
@@ -1898,7 +1896,7 @@ I2PHelperPlugin
 						
 						for ( int j=0; j<10; j++ ){
 							
-							if ( j > 0 ){
+							if (( j==0 && !testPort( local_port )) ||  j > 0 ){
 								
 								local_port = allocatePort( remote_port );
 							}
@@ -2019,28 +2017,9 @@ I2PHelperPlugin
 			
 			int port = 20000 + RandomUtils.nextInt( 20000 );
 			
-			ServerSocketChannel ssc = null;
-
-			try{	
-				ssc = ServerSocketChannel.open();
-				
-				ssc.socket().bind( new InetSocketAddress( "127.0.0.1", port ));
+			if ( testPort( port )){
 				
 				return( port );
-				
-			}catch( Throwable e ){
-				
-			}finally{
-				
-				if ( ssc != null ){
-					
-					try{
-						ssc.close();
-						
-					}catch( Throwable e ){
-						
-					}
-				}
 			}
 		}
 		
@@ -6124,28 +6103,9 @@ outer:
 				}
 			}
 			
-			ServerSocketChannel ssc = null;
-
-			try{	
-				ssc = ServerSocketChannel.open();
-				
-				ssc.socket().bind( new InetSocketAddress( "127.0.0.1", port ));
+			if ( testPort( port )){
 				
 				return( port );
-				
-			}catch( Throwable e ){
-				
-			}finally{
-				
-				if ( ssc != null ){
-					
-					try{
-						ssc.close();
-						
-					}catch( Throwable e ){
-						
-					}
-				}
 			}
 		}
 		
