@@ -74,6 +74,7 @@ import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.AESemaphore;
 import com.biglybt.core.util.AEThread2;
+import com.biglybt.core.util.AddressUtils;
 import com.biglybt.core.util.AsyncDispatcher;
 import com.biglybt.core.util.BDecoder;
 import com.biglybt.core.util.ByteFormatter;
@@ -2765,6 +2766,25 @@ I2PHelperPlugin
 	}
 	
 	public InetSocketAddress
+	getPrimaryEndpoint(
+		int		dht_index )
+	{
+		I2PHelperRouter	r = router;
+
+		if ( r != null ){
+			
+			I2PHelperRouterDHT dht = r.selectDHT( dht_index );
+			
+			if ( dht != null ){
+						
+				return( InetSocketAddress.createUnresolved( dht.getB32Address(), 6881 ));
+			}
+		}
+		
+		return( null );
+	}
+	
+	public InetSocketAddress
 	getSecondaryEndpoint(
 		int		dht_index )
 	{
@@ -3850,7 +3870,7 @@ I2PHelperPlugin
 						
 						System.out.println( c.getAge());
 						
-						System.out.println( "    " + c.getProperties() + " -> " + plugin_maybe_null.alt_network_handler_i2p.decodeContact( c ));
+						System.out.println( "    " + c.getProperties() + " -> " + I2PHelperAltNetHandlerI2P.decodeContact( c ));
 					}
 				}else if ( cmd.equals( "alt_tor" )){
 
@@ -3862,7 +3882,7 @@ I2PHelperPlugin
 						
 						System.out.println( c.getAge());
 						
-						System.out.println( "    " + c.getProperties() + " -> " + plugin_maybe_null.alt_network_handler_tor.decodeContact( c ));
+						System.out.println( "    " + c.getProperties() + " -> " + I2PHelperAltNetHandlerTor.decodeContact( c ));
 					}
 				}else if ( cmd.equals( "bridge_put" )){
 
@@ -4475,7 +4495,7 @@ I2PHelperPlugin
 			
 				// we need to pass the peer_ip to the core so that it doesn't just see '127.0.0.1'
 			
-			final AEProxyAddressMapper.PortMapping mapping = 
+			AEProxyAddressMapper.PortMapping mapping = 
 					AEProxyFactory.getAddressMapper().registerPortMapping( 
 						proxy_port, 
 						tor_socket.getLocalPort(),
@@ -4483,7 +4503,12 @@ I2PHelperPlugin
 						getTorPort( dht_index ),
 						remote_ip,
 						null );
-					
+				
+			synchronized( local_port_map ){
+				
+				local_port_map.put( proxy_port, dht_index );
+			}
+			
 			// System.out.println( "local port=" + local_port );
 			
 			boolean	ok = false;
@@ -4520,6 +4545,14 @@ I2PHelperPlugin
 							}
 							
 							mapping.unregister();
+							
+							synchronized( local_port_map ){
+								
+								if ( local_port_map.get( proxy_port ) == dht_index ){
+								
+									local_port_map.remove( proxy_port );
+								}
+							}
 						}
 					};
 					
@@ -4532,6 +4565,14 @@ I2PHelperPlugin
 				if ( !ok ){
 					
 					mapping.unregister();
+					
+					synchronized( local_port_map ){
+						
+						if ( local_port_map.get( proxy_port ) == dht_index ){
+						
+							local_port_map.remove( proxy_port );
+						}
+					}
 				}
 			}
 		}catch( Throwable e ){
@@ -4941,28 +4982,67 @@ I2PHelperPlugin
 		String					host,
 		int						port,
 		Map<String,Object>		options )
-	{
-		String	local_host = null;
+	
+		throws IPCException
+	{		
+		String net = AENetworkClassifier.categoriseAddress( host );
 		
-		if ( AENetworkClassifier.categoriseAddress( host ) == AENetworkClassifier.AT_TOR ){
+		int	explicit_net = 0;	// LA_EXPLICIT_NET_NONE
+		
+		if ( options.containsKey( "net" )){
 			
-			for ( int i=0;i<tor_hosts.length;i++){
-				
-				if ( getTorPort( i ) == port ){
-					
-					local_host = getTorHost(i);
-					
-					break;
-				}
-			}
+			explicit_net = (Integer)options.get( "net" );
 		}
 		
 		Map<String,Object> result = new HashMap<>();
-		
-		if ( local_host != null ){
+
+		if ( net == AENetworkClassifier.AT_TOR ){
+	
+			String	local_host = null;
+
+			if ( explicit_net == 0 ){
+				
+				for ( int i=0;i<tor_hosts.length;i++){
+					
+					if ( getTorPort( i ) == port ){
+						
+						local_host = getTorHost(i);
+						
+						break;
+					}
+				}
+			}else if ( explicit_net == 1 ){	// LA_EXPLICIT_NET_MIX
+				
+				local_host = getTorHost(0);
+				
+			}else{
+				
+				local_host = getTorHost(1);	// LA_EXPLICIT_NET_PURE
+			}
 			
-			result.put( "host", local_host );
-			result.put( "port", port );
+			if ( local_host != null ){
+				
+				result.put( "host", local_host );
+				result.put( "port", port );
+			}
+		}else if ( net == AENetworkClassifier.AT_I2P ){
+			
+			InetSocketAddress isa = null;
+			
+			if ( explicit_net == 1 ){	// LA_EXPLICIT_NET_MIX
+				
+				isa = getPrimaryEndpoint( I2PHelperRouter.DHT_MIX );
+				
+			}else if ( explicit_net == 2 ){	// LA_EXPLICIT_NET_PURE
+				
+				isa = getPrimaryEndpoint( I2PHelperRouter.DHT_NON_MIX );
+			}
+			
+			if ( isa != null ){
+				
+				result.put( "host", AddressUtils.getHostAddress(isa));
+				result.put( "port", isa.getPort());
+			}
 		}
 		
 		return( result );
@@ -6003,7 +6083,7 @@ I2PHelperPlugin
 			if ( !source.isUnresolved()){
 				
 				int required_dht = selectDHTIndex( download );
-				
+					
 				synchronized( local_port_map ){
 					
 					Integer dht_index = local_port_map.get( source.getPort());

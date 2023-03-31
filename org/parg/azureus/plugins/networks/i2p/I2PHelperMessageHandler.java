@@ -433,7 +433,129 @@ I2PHelperMessageHandler
 							data_bytes_received += byte_count;
 						}
 					});
-			}			
+				
+			}else if ( peer_host.endsWith( ".onion" )){
+
+				connection.getOutgoingMessageQueue().registerQueueListener(
+					new OutgoingMessageQueue.MessageQueueListener() 
+					{						
+						@Override
+						public void protocolBytesSent(int byte_count) {
+						}
+						
+						@Override
+						public void messageSent(Message message) {
+						}
+						
+						@Override
+						public void messageRemoved(Message message) {
+						}
+						
+						@Override
+						public void messageQueued(Message message) {
+						}
+						
+						@Override
+						public boolean messageAdded(Message message) {
+							
+							if ( message instanceof BTHandshake ){
+							
+								BTHandshake	bt_handshake = (BTHandshake)message;
+								
+									// deterministically switch peer-id (factor in dht network in case we switch nets)
+								
+								byte[] peer_id = bt_handshake.getPeerId();
+								
+								for ( int i=0;i<peer_id_mask.length;i++){
+									
+									peer_id[i+8] ^= peer_id_mask[i];
+								}
+								
+								byte	dht_index = (byte)plugin.selectDHTIndex( bt_handshake.getDataHash());
+								
+								peer_id[19] += dht_index;
+								
+								byte[] sha1 = new SHA1Simple().calculateHash( peer_id );
+								
+								for ( int i=8;i<20;i++){
+									
+									peer_id[i] = sha1[i];
+								}
+							}
+							
+							return true;
+						}
+						
+						@Override
+						public void flush() {
+						}
+						
+						@Override
+						public void 
+						dataBytesSent(
+							int byte_count) 
+						{
+							data_bytes_sent += byte_count;
+						}
+					});
+				
+				connection.getIncomingMessageQueue().registerQueueListener(
+					new IncomingMessageQueue.MessageQueueListener() {
+						
+						private byte[] torrent_hash;
+						
+						@Override
+						public void protocolBytesReceived(int byte_count) {
+						}
+						
+						@Override
+						public boolean 
+						messageReceived(
+							Message message ) 
+						{
+							//System.out.println( "Received: " + connection + " - " + message );
+							
+							if ( message instanceof BTHandshake ){
+								
+								BTHandshake	bt_handshake = (BTHandshake)message;
+																
+								torrent_hash = bt_handshake.getDataHash();
+								
+								if ( connection.isIncoming()){
+								
+									TransportEndpointTCP ep = (TransportEndpointTCP)connection.getTransport().getTransportEndpoint();
+								
+									SocketChannel chan = ep.getSocketChannel();
+									
+									if ( chan != null && !plugin.checkMixState( (InetSocketAddress)chan.socket().getRemoteSocketAddress(), torrent_hash )){
+										
+										throw( new RuntimeException( "Incorrect mix" ));
+									}
+								}else{
+								
+									if ( !plugin.checkMixState( address, torrent_hash )){
+										
+										throw( new RuntimeException( "Incorrect mix" ));
+									}
+								}
+							}
+
+							return false;
+						}
+						
+						@Override
+						public boolean isPriority() {
+							return false;
+						}
+						
+						@Override
+						public void 
+						dataBytesReceived(int byte_count) 
+						{
+							data_bytes_received += byte_count;
+						}
+					});
+			}	
 		}
 	}
 	

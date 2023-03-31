@@ -25,6 +25,7 @@ package org.parg.azureus.plugins.networks.i2p;
 
 import java.util.*;
 
+import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.AsyncDispatcher;
@@ -173,7 +174,9 @@ I2PHelperNetworkMixer
 			
 			if ( existing_state == MS_NONE ){
 				
-				if ( PluginCoreUtils.unwrap( download ).getDownloadState().isNetworkEnabled( AENetworkClassifier.AT_I2P )){
+				DownloadManagerState ds = PluginCoreUtils.unwrap( download ).getDownloadState();
+
+				if ( ds.isNetworkEnabled( AENetworkClassifier.AT_I2P ) || ds.isNetworkEnabled( AENetworkClassifier.AT_TOR )){
 					
 					download.setIntAttribute( ta_mixstate, MS_MANUAL );
 					
@@ -367,7 +370,9 @@ I2PHelperNetworkMixer
 
 		if ( existing_state == MS_NONE ){
 			
-			if ( PluginCoreUtils.unwrap( download ).getDownloadState().isNetworkEnabled( AENetworkClassifier.AT_I2P )){
+			DownloadManagerState ds = PluginCoreUtils.unwrap( download ).getDownloadState();
+
+			if ( ds.isNetworkEnabled( AENetworkClassifier.AT_I2P ) || ds.isNetworkEnabled( AENetworkClassifier.AT_TOR )){
 				
 				download.setIntAttribute( ta_mixstate, MS_MANUAL );
 				
@@ -1071,7 +1076,9 @@ I2PHelperNetworkMixer
 				continue;
 			}
 			
-			if ( !PluginCoreUtils.unwrap( download ).getDownloadState().isNetworkEnabled( AENetworkClassifier.AT_PUBLIC )){
+			DownloadManagerState ds = PluginCoreUtils.unwrap( download ).getDownloadState();
+
+			if ( !ds.isNetworkEnabled( AENetworkClassifier.AT_PUBLIC )){
 				
 				continue;
 			}
@@ -1336,7 +1343,9 @@ I2PHelperNetworkMixer
 
 		if ( existing_state == MS_NONE ){
 			
-			if ( !PluginCoreUtils.unwrap( download ).getDownloadState().isNetworkEnabled( AENetworkClassifier.AT_I2P )){
+			DownloadManagerState ds = PluginCoreUtils.unwrap( download ).getDownloadState();
+
+			if ( !( ds.isNetworkEnabled( AENetworkClassifier.AT_I2P ) || ds.isNetworkEnabled( AENetworkClassifier.AT_TOR ))){
 
 				plugin.log( "Netmix: activating " + download.getName() + " on demand" );
 
@@ -1384,7 +1393,10 @@ I2PHelperNetworkMixer
 		try{
 			download.setIntAttribute( ta_mixstate, MS_CHANGING );
 			
-			PluginCoreUtils.unwrap( download ).getDownloadState().setNetworkEnabled( AENetworkClassifier.AT_I2P, enabled );
+			DownloadManagerState ds = PluginCoreUtils.unwrap( download ).getDownloadState();
+			
+			ds.setNetworkEnabled( AENetworkClassifier.AT_I2P, enabled );
+			ds.setNetworkEnabled( AENetworkClassifier.AT_TOR, enabled );
 			
 			if ( enabled ){
 				

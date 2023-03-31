@@ -22,6 +22,7 @@
 
 package org.parg.azureus.plugins.networks.i2p;
 
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -29,6 +30,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
+import net.i2p.data.Base32;
 import net.i2p.data.Destination;
 
 import com.biglybt.core.util.BEncoder;
@@ -65,7 +67,7 @@ I2PHelperAltNetHandlerI2P
 		}
 	}
 	
-	public NodeInfo
+	public static NodeInfo
 	decodeContact(
 		DHTTransportAlternativeContact		contact )
 	{
@@ -126,6 +128,24 @@ I2PHelperAltNetHandlerI2P
 		getNetworkType()
 		{
 			return( network );
+		}
+		
+		public InetSocketAddress 
+		getNotionalAddress(
+			DHTTransportAlternativeContact contact )
+		{
+			NodeInfo ni = decodeContact( contact );
+			
+			if ( ni != null ){
+				
+				byte[]	peer_hash = ni.getDestination().calculateHash().getData();
+				
+				String peer_ip = Base32.encode( peer_hash ) + ".b32.i2p";
+				
+				return( InetSocketAddress.createUnresolved(peer_ip, 6881 ));
+			}
+			
+			return( null );
 		}
 		
 		private void
