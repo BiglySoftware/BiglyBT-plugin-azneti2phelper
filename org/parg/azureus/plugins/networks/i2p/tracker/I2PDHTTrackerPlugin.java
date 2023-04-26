@@ -84,6 +84,7 @@ import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperDHT;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperDHTAdapter;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperDHTListener;
+import org.parg.azureus.plugins.networks.i2p.I2PHelperPlugin.TorEndpoint;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouter;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouterDHT;
 import org.parg.azureus.plugins.networks.i2p.vuzedht.DHTI2P;
@@ -1277,7 +1278,7 @@ I2PDHTTrackerPlugin
 							}
 						});
 										
-					String tor_host = router.getPlugin().getTorHost( dht.getDHTIndex());
+					String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
 					
 					String[]	networks = download.getListAttribute( ta_networks );
 					
@@ -1393,7 +1394,7 @@ I2PDHTTrackerPlugin
 				boolean is_complete = isComplete( download );
 				
 				
-				String tor_host = router.getPlugin().getTorHost( dht.getDHTIndex());
+				String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
 				
 				String[]	networks = download.getListAttribute( ta_networks );
 				
@@ -3254,7 +3255,9 @@ I2PDHTTrackerPlugin
 			
 			byte[] hash = target.getHash();
 			
-			String our_tor_host = router.getPlugin().getTorHost( rdht.getDHTIndex());
+			TorEndpoint our_tep = router.getPlugin().getTorEndpoint( rdht.getDHTIndex());
+			
+			String our_tor_host = our_tep.getHost();
 			
 			try{
 				Map map = BDecoder.decode( value );
@@ -3285,7 +3288,7 @@ I2PDHTTrackerPlugin
 				
 					if ( !th.equals( our_tor_host )){
 											
-						int port = router.getPlugin().getTorPort( rdht.getDHTIndex());
+						int port = our_tep.getPort();
 						
 						InetSocketAddress o_address = originator.getAddress();
 						

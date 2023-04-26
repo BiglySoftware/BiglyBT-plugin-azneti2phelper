@@ -31,7 +31,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.reflect.Field;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -41,6 +40,9 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.Signature;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -54,9 +56,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.jar.Attributes.Name;
+
 
 import net.i2p.client.streaming.I2PSocket;
+import net.i2p.crypto.eddsa.EdDSAPrivateKey;
+import net.i2p.crypto.eddsa.EdDSAPublicKey;
 import net.i2p.data.Base32;
 import net.i2p.data.Base64;
 import net.i2p.data.Destination;
@@ -128,6 +132,7 @@ import com.biglybt.pif.ui.model.BasicPluginViewModel;
 import com.biglybt.pif.utils.LocaleUtilities;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
 import org.parg.azureus.plugins.networks.i2p.plugindht.I2PHelperDHTPluginInterface;
+import org.parg.azureus.plugins.networks.i2p.proxydht.TorProxyDHT;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouter;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouterDHT;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperSocksProxy;
@@ -325,8 +330,23 @@ I2PHelperPlugin
                 cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
                 _cl = LoadClientAppsJob.class.getClassLoader(); // PARG ClassLoader.getSystemClassLoader();
                 
-              
+        
+        EdDSAPublicKey
+        --------------
+        New constructor
+        
+            public EdDSAPublicKey(byte[] pk) throws InvalidKeySpecException {
+        		this(new EdDSAPublicKeySpec(pk,EdDSANamedCurveTable.ED_25519_CURVE_SPEC));
+    		}
+           
                 
+        EdDSAPrivateKey
+        ---------------
+        New constructor
+        
+            public EdDSAPrivateKey(byte[] hash) throws InvalidKeySpecException {
+        		this(new EdDSAPrivateKeySpec(EdDSANamedCurveTable.ED_25519_CURVE_SPEC, hash));
+    		}
                 
                 
        	Copy Resource Files
@@ -388,8 +408,13 @@ I2PHelperPlugin
 	
 	private static final int		TOR_SERVER_PORT_BASE	= 27657;	// don't change this, it is used externally (well 27658 is)
 	
-	private String[]				tor_hosts		= new String[ dht_count ];
+	private TorEndpoint[]			tor_endpoints		= new TorEndpoint[ dht_count ];
 			
+	{
+		for ( int i=0;i<dht_count;i++){
+			tor_endpoints[i] = new TorEndpoint( i + TOR_SERVER_PORT_BASE );
+		}
+	}
 	private InfoParameter			i2p_address_param;
 	private IntParameter 			int_port_param;
 	private IntParameter 			ext_port_param;
@@ -438,6 +463,8 @@ I2PHelperPlugin
 	
 	private I2PHelperAltNetHandlerI2P		alt_network_handler_i2p;
 	private I2PHelperAltNetHandlerTor		alt_network_handler_tor;
+	
+	private TorProxyDHT						tor_proxy_dht;
 	
 	private I2PHelperNetworkMixer		network_mixer;
 	
@@ -1551,6 +1578,8 @@ I2PHelperPlugin
 				alt_network_handler_i2p = new I2PHelperAltNetHandlerI2P();
 				alt_network_handler_tor = new I2PHelperAltNetHandlerTor();
 				
+				tor_proxy_dht = new TorProxyDHT( this );
+				
 				plugin_interface.addListener(
 					new PluginAdapter()
 					{
@@ -1816,18 +1845,11 @@ I2PHelperPlugin
 		}
 	}
 	
-	public String
-	getTorHost(
+	public TorEndpoint
+	getTorEndpoint(
 		int		dht_index )
 	{
-		return( tor_hosts[ dht_index ]);
-	}
-	
-	public int
-	getTorPort(
-		int		dht_index )
-	{
-		return( TOR_SERVER_PORT_BASE + dht_index );
+		return( tor_endpoints[ dht_index ]);
 	}
 	
 	public boolean
@@ -1886,7 +1908,7 @@ I2PHelperPlugin
 
 					Map<String,Object>	options = new HashMap<>();
 			
-					int remote_port = getTorPort( dht_index );
+					int remote_port = getTorEndpoint( dht_index ).getPort();
 
 					int so_rcvbuf_size = COConfigurationManager.getIntParameter( "network.tcp.socket.SO_RCVBUF" );
 							
@@ -1951,12 +1973,14 @@ I2PHelperPlugin
 						
 						if ( selector != null ){
 							
+							tor_endpoints[i].setSelector( selector );
+							
 							options.put( AEProxyFactory.SP_PORT, local_port );
 										
 							options.put( "remote-port" /*AEProxyFactory.SP_REMOTE_PORT*/ , remote_port );
 							
 							options.put( AEProxyFactory.SP_BIND, "127.0.0.1" );
-					
+												
 							Map<String,Object> reply =
 									AEProxyFactory.getPluginServerProxy(
 										plugin_interface.getPluginName() + ": Tor " + i,
@@ -1967,10 +1991,14 @@ I2PHelperPlugin
 							if ( reply != null ){
 								
 								String host = (String)reply.get( "host" );
-										
-								tor_hosts[i] = host;	// don't need to store port, can figure out from dht index when reading values etc
+																		
+								byte[] pk = (byte[])reply.get( "pk" );
 								
-								host_str += (host_str.isEmpty()?"":"\n") + tor_hosts[i] + ":" + remote_port;
+								byte[] sk = (byte[])reply.get( "sk" );
+								
+								tor_endpoints[i].setDetails( host, pk, sk );	
+								
+								host_str += (host_str.isEmpty()?"":"\n") + host + ":" + remote_port;
 								
 								if ( dht_index == 0 ){
 									
@@ -2002,6 +2030,8 @@ I2PHelperPlugin
 				}
 			}
 		}finally{
+			
+			tor_proxy_dht.initialise();
 			
 			if ( !status_set ){
 			
@@ -4489,7 +4519,7 @@ I2PHelperPlugin
 			
 			final int proxy_port = bigly_socket.getLocalPort();
 			
-			String local_ip		= getTorHost( dht_index );
+			String local_ip		= getTorEndpoint( dht_index ).getHost();
 		
 			String remote_ip	= "remote." + next_remote_onion_id.incrementAndGet() + ".onion";	// we don't know
 			
@@ -4500,7 +4530,7 @@ I2PHelperPlugin
 						proxy_port, 
 						tor_socket.getLocalPort(),
 						local_ip,
-						getTorPort( dht_index ),
+						getTorEndpoint( dht_index ).getPort(),
 						remote_ip,
 						null );
 				
@@ -5002,22 +5032,22 @@ I2PHelperPlugin
 
 			if ( explicit_net == 0 ){
 				
-				for ( int i=0;i<tor_hosts.length;i++){
+				for ( TorEndpoint tep: tor_endpoints ){
 					
-					if ( getTorPort( i ) == port ){
+					if ( tep.getPort() == port ){
 						
-						local_host = getTorHost(i);
+						local_host = tep.getHost();
 						
 						break;
 					}
 				}
-			}else if ( explicit_net == 1 ){	// LA_EXPLICIT_NET_MIX
+			}else if ( explicit_net == 1 ){					// LA_EXPLICIT_NET_MIX
 				
-				local_host = getTorHost(0);
+				local_host = tor_endpoints[0].getHost();
 				
 			}else{
 				
-				local_host = getTorHost(1);	// LA_EXPLICIT_NET_PURE
+				local_host = tor_endpoints[1].getHost();	// LA_EXPLICIT_NET_PURE
 			}
 			
 			if ( local_host != null ){
@@ -6048,6 +6078,13 @@ I2PHelperPlugin
 					socket_forwarder = null;
 				}
 				
+				for ( TorEndpoint tep: tor_endpoints ){
+					
+					tep.destroy();
+				}
+				
+				tor_proxy_dht.destroy();
+				
 				removeParameterListeners();
 			}
 		}finally{
@@ -6499,5 +6536,174 @@ outer:
 	DDBTestXFer
 		implements DistributedDatabaseTransferType
 	{	
+	}
+	
+	public static class
+	TorEndpoint
+	{
+		public static PublicKey
+		getPublicKey(
+			String		host )
+		
+			throws Exception
+		{
+			int pos = host.lastIndexOf( "." );
+			
+			byte[] host_decode = Base32.decode( pos==-1?host:host.substring( 0, pos ));
+
+			byte[] host_pk = Arrays.copyOfRange( host_decode, 0, 32 );
+
+			return( new EdDSAPublicKey( host_pk ));
+		}
+		
+		public static boolean
+		verify(
+			PublicKey		pk,
+			byte[]			bytes,
+			byte[]			sig )
+		{
+			try{
+				Signature signature = Signature.getInstance( "SHA512withEdDSA", "I2P");
+				
+				signature.initVerify( pk );
+				
+				signature.update( bytes );
+				
+				return( signature.verify( sig  ));
+				
+			}catch( Throwable e ){
+				
+				return( false );
+			}
+		}
+		
+		private final int	port;
+		private String		host;
+		
+		private PublicKey		public_key;
+		private PrivateKey		private_key;
+		
+		private VirtualServerChannelSelector	selector;
+		
+		TorEndpoint(
+			int		_port )
+		{
+			port	= _port;
+		}
+		
+		protected void
+		setSelector(
+			VirtualServerChannelSelector		_selector )
+		{
+			if ( selector != null ){
+				
+				selector.stopProcessing();
+			}
+
+			selector = _selector;
+		}
+		
+		protected void
+		setDetails(
+			String		_host,
+			byte[]		pk,
+			byte[]		sk )
+		{
+			host = _host;
+			
+			if ( pk != null && sk != null ){
+				
+				try{
+
+					byte[] host_decode = Base32.decode( host.substring( 0, host.lastIndexOf( "." )));
+
+					byte[] host_pk = Arrays.copyOfRange( host_decode, 0, 32 );
+				
+					if ( !Arrays.equals(pk, host_pk)){
+					
+						throw( new Exception( "host pk mismatch" ));
+					}
+				
+					Signature signature = Signature.getInstance( "SHA512withEdDSA", "I2P");
+				   			
+		            public_key = new EdDSAPublicKey( pk );
+	
+	                private_key = new EdDSAPrivateKey( sk );
+	                    
+	                if ( !Arrays.equals( ((EdDSAPrivateKey)private_key).getAbyte(), pk )){
+	                	
+	                	throw( new Exception( "private key/public key mismatch" ));
+	                }
+	                
+	                signature.initSign( private_key );
+					
+					String TEST_STRING = "Hello world";
+					
+					signature.update( TEST_STRING.getBytes());
+					
+					byte[] sig_bytes = signature.sign();
+					
+					signature = Signature.getInstance( "SHA512withEdDSA", "I2P");
+					
+					signature.initVerify( public_key );
+					
+					signature.update( TEST_STRING.getBytes());
+					
+					if ( !signature.verify( sig_bytes )){
+						
+						throw( new Exception(  "Signature verification fail" ));
+					}
+					
+					//Debug.out( "Host " + host + " keys ok" );
+					
+				}catch( Throwable e ){
+					
+					Debug.out( "Crypto setup failed for " + host, e );
+					
+					public_key	= null;
+					private_key	= null;
+				}
+			}
+		}
+		
+		public int
+		getPort()
+		{
+			return( port );
+		}
+		
+			/** 
+			 * @return may be null
+			 */
+		
+		public String
+		getHost()
+		{
+			return( host );
+		}
+		
+		public byte[]
+		sign(
+			byte[]		bytes )
+		
+			throws Exception
+		{
+			Signature signature = Signature.getInstance( "SHA512withEdDSA", "I2P");
+   			            
+            signature.initSign( private_key );
+						
+			signature.update( bytes );
+			
+			return( signature.sign());
+		}
+		
+		protected void
+		destroy()
+		{
+			if ( selector != null ){
+				
+				selector.stopProcessing();
+			}
+		}
 	}
 }
