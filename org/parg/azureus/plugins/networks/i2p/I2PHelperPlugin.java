@@ -3898,7 +3898,7 @@ I2PHelperPlugin
 					
 					for ( DHTTransportAlternativeContact c: contacts ){
 						
-						System.out.println( c.getAge());
+						System.out.println( "v=" + c.getVersion() + ", age=" + c.getAge());
 						
 						System.out.println( "    " + c.getProperties() + " -> " + I2PHelperAltNetHandlerI2P.decodeContact( c ));
 					}
@@ -3910,7 +3910,7 @@ I2PHelperPlugin
 					
 					for ( DHTTransportAlternativeContact c: contacts ){
 						
-						System.out.println( c.getAge());
+						System.out.println( "v=" + c.getVersion() + ", age=" + c.getAge());
 						
 						System.out.println( "    " + c.getProperties() + " -> " + I2PHelperAltNetHandlerTor.decodeContact( c ));
 					}

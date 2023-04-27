@@ -45,6 +45,8 @@ import com.biglybt.core.dht.transport.udp.impl.DHTUDPUtils;
 public class 
 I2PHelperAltNetHandlerTor 
 {
+	public static final int LOCAL_VERSION	= 2;
+	
 	private DHTTransportAlternativeNetworkImpl		tor_net = new DHTTransportAlternativeNetworkImpl( 6 ); // replace sometime after 3.4 DHTTransportAlternativeNetwork.AT_TOR );
 	
 	protected
@@ -204,6 +206,7 @@ I2PHelperAltNetHandlerTor
 		DHTTransportAlternativeContactImpl
 			implements DHTTransportAlternativeContact
 		{
+			private final int				version;
 			private final InetSocketAddress	address;
 			private final int	 			seen_secs;
 			private final int	 			id;
@@ -221,9 +224,13 @@ I2PHelperAltNetHandlerTor
 					
 					seen_secs = (int)( SystemTime.getMonotonousTime()/1000) - RandomUtils.nextInt( 60 );
 					
+					version	= LOCAL_VERSION;
+					
 				}else{
 				
-					seen_secs	= (int)( seen/1000 );				
+					seen_secs	= (int)( seen/1000 );
+					
+					version = 0;	// means "unknown" for addresses added with no version context
 				}
 				
 				int	_id;
@@ -253,7 +260,7 @@ I2PHelperAltNetHandlerTor
 			public int
 			getVersion()
 			{
-				return( 1 );
+				return( version );
 			}
 			
 			@Override

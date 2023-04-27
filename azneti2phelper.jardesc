@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml version="1.0" encoding="windows-1252" standalone="no"?>
 <jardesc>
     <jar path="azneti2phelper/azneti2phelper.jar"/>
     <options buildIfNeeded="true" compress="true" descriptionLocation="/azneti2phelper/azneti2phelper.jardesc" exportErrors="true" exportWarnings="true" includeDirectoryEntries="false" overwrite="false" saveDescription="true" storeRefactorings="false" useSourceFolders="false"/>
@@ -11,14 +11,15 @@
         </sealing>
     </manifest>
     <selectedElements exportClassFiles="true" exportJavaFiles="true" exportOutputFolder="false">
+        <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p"/>
         <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.util"/>
         <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.tracker"/>
-        <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p"/>
         <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.internat"/>
+        <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.snarkdht"/>
         <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.plugindht"/>
         <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.vuzedht"/>
+        <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.proxydht"/>
         <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.router"/>
         <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.swt"/>
-        <javaElement handleIdentifier="=azneti2phelper/&lt;org.parg.azureus.plugins.networks.i2p.snarkdht"/>
     </selectedElements>
 </jardesc>
