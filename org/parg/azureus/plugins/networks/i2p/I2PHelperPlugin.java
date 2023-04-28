@@ -3926,7 +3926,30 @@ I2PHelperPlugin
 					byte[] value = bits[2].getBytes( "UTF-8" );
 
 					plugin_maybe_null.bridgePut( "Bridge Test", key, value, null );
+				
+				}else if ( cmd.equals( "tpd_put" )){
+
+					if ( bits.length != 2 ){
+						
+						throw( new Exception( "usage: tpd_put <key>"));
+					}
+									
+					byte[] key 		= ("tpd-key:" + bits[1] ).getBytes();
+					byte[] value 	= "I'm the pie".getBytes();
+
+					plugin_maybe_null.tor_proxy_dht.proxyPut( key, value );
 					
+				}else if ( cmd.equals( "tpd_get" )){
+
+					if ( bits.length != 2 ){
+						
+						throw( new Exception( "usage: tpd_get <key>"));
+					}
+									
+					byte[] key 		= ("tpd-key:" + bits[1] ).getBytes();
+
+					plugin_maybe_null.tor_proxy_dht.proxyGet( key );
+
 				}else{
 			
 					adapter.log( "Usage: print|info..." );
@@ -6541,18 +6564,36 @@ outer:
 	public static class
 	TorEndpoint
 	{
-		public static PublicKey
-		getPublicKey(
+		public static byte[]
+		getPublicKeyBytes(
 			String		host )
-		
-			throws Exception
 		{
 			int pos = host.lastIndexOf( "." );
 			
 			byte[] host_decode = Base32.decode( pos==-1?host:host.substring( 0, pos ));
 
 			byte[] host_pk = Arrays.copyOfRange( host_decode, 0, 32 );
+			
+			return( host_pk );
+		}
+		
+		public static PublicKey
+		getPublicKey(
+			String		host )
+		
+			throws Exception
+		{
+			byte[] host_pk = getPublicKeyBytes( host );
 
+			return( new EdDSAPublicKey( host_pk ));
+		}
+		
+		public static PublicKey
+		getPublicKey(
+			byte[]		host_pk )
+		
+			throws Exception
+		{
 			return( new EdDSAPublicKey( host_pk ));
 		}
 		

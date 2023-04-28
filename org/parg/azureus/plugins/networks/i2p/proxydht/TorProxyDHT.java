@@ -19,8 +19,10 @@
 package org.parg.azureus.plugins.networks.i2p.proxydht;
 
 import java.net.InetSocketAddress;
+import java.security.MessageDigest;
 import java.security.PublicKey;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAltNetHandlerTor;
 import org.parg.azureus.plugins.networks.i2p.I2PHelperPlugin;
@@ -29,10 +31,12 @@ import com.biglybt.core.dht.transport.DHTTransportAlternativeContact;
 import com.biglybt.core.dht.transport.DHTTransportAlternativeNetwork;
 import com.biglybt.core.dht.transport.udp.impl.DHTUDPUtils;
 import com.biglybt.core.util.AENetworkClassifier;
+import com.biglybt.core.util.AESemaphore;
 import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.AddressUtils;
 import com.biglybt.core.util.BDecoder;
 import com.biglybt.core.util.BEncoder;
+import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.CopyOnWriteList;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.RandomUtils;
@@ -40,6 +44,7 @@ import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.TimerEvent;
 import com.biglybt.core.util.TimerEventPerformer;
+import com.biglybt.pif.PluginAdapter;
 import com.biglybt.pif.messaging.MessageException;
 import com.biglybt.pif.messaging.MessageManager;
 import com.biglybt.pif.messaging.generic.GenericMessageConnection;
@@ -58,6 +63,7 @@ import net.i2p.data.Base32;
 public class 
 TorProxyDHT
 {
+	private static final boolean	LOOPBACK			= false;
 	private static final boolean	ENABLE_LOGGING		= true;
 	
 	private static final boolean	ENABLE_PROXY_CLIENT = true;
@@ -65,12 +71,18 @@ TorProxyDHT
 	
 	private I2PHelperPlugin		plugin;
 	
-	private static final int MT_KEEP_ALIVE				= 0;
+	private static final int MT_PROXY_KEEP_ALIVE		= 0;
 	private static final int MT_PROXY_ALLOC_REQUEST		= 1;
 	private static final int MT_PROXY_ALLOC_OK_REPLY	= 2;
 	private static final int MT_PROXY_ALLOC_FAIL_REPLY	= 3;
 	private static final int MT_PROXY_PROBE_REQUEST		= 4;
 	private static final int MT_PROXY_PROBE_REPLY		= 5;
+	private static final int MT_PROXY_CLOSE				= 6;
+	private static final int MT_PROXY_OP_REQUEST		= 7;
+	private static final int MT_PROXY_OP_REPLY			= 8;
+
+	private static final int PROXY_OP_PUT		= 1;
+	private static final int PROXY_OP_GET		= 2;
 	
 	private static final int MAX_SERVER_PROXIES	= 4;
 	
@@ -126,7 +138,27 @@ TorProxyDHT
 			}
 		};
 
-			
+	private AtomicLong						proxy_request_seq	= new AtomicLong();
+	private LinkedList<ProxyRequest>		proxy_requests		= new LinkedList<>();
+	private AESemaphore						proxy_requests_sem	= new AESemaphore( "TPD:req" );
+	private AEThread2						proxy_request_dispatcher;
+	
+	private OutboundConnectionProxy			active_client_proxy;
+	
+	private int PROXY_FAIL_UIDS_MAX	= 8;
+	
+	private Map<String,String>		proxy_client_fail_uids = 
+		new LinkedHashMap<String,String>(PROXY_FAIL_UIDS_MAX,0.75f,true)
+		{
+			@Override
+			protected boolean
+			removeEldestEntry(
+		   		Map.Entry<String,String> eldest) 
+			{
+				return size() > PROXY_FAIL_UIDS_MAX;
+			}
+		};
+		
 	private volatile boolean destroyed;
 	
 	public
@@ -146,15 +178,28 @@ TorProxyDHT
 		int inbound_limit = 50*1024;
 
 		inbound_limiter 	= cman.createRateLimiter( "TorDHTProxy:in", inbound_limit );
+		
+		plugin.getPluginInterface().addListener(
+			new PluginAdapter()
+			{
+				@Override
+				public void 
+				closedownInitiated()
+				{
+					for ( Connection con: connections ){
+						
+						con.closingDown();
+					}
+				}
+			});
 	}
 	
 	public void
 	initialise()
-	{
-		
+	{		
 		tep_mix		= plugin.getTorEndpoint( 0 );
 		tep_pure	= plugin.getTorEndpoint( 1 );
-
+		
 		try{
 			int mix_port = tep_mix.getPort();
 			
@@ -218,14 +263,19 @@ TorProxyDHT
 								
 								if ( ccp == null ){
 									
-									ccp_str = "none";
+									ccp_str = "";
 									
 								}else{
 									
-									ccp_str = current_client_proxy.getHost() + "; state=" +  current_client_proxy.getState();
+									ccp_str = ", " + ccp.getString();
 								}
 								
-								log( "client proxy: " + ccp_str + ", server proxies: " + server_proxies.size());
+								log( "con=" + connections.size() + ccp_str );
+								
+								for ( InboundConnection sp: server_proxies ){
+									
+									log( "    " + sp.getString());
+								}
 							}
 							
 							checkClientProxy( true );
@@ -251,12 +301,301 @@ TorProxyDHT
 						}
 					});
 				
-				checkClientProxy( true );
+			checkClientProxy( true );
+			
+			byte[] torrent_hash = new byte[]{ 0,1,2,3,4,5 };
+				
+			proxyAnnounce( torrent_hash, true );
 			
 		}catch( Throwable e ){
 			
 			Debug.out( e );
 		}
+	}
+	
+	private void
+	proxyAnnounce(
+		byte[]		torrent_hash,
+		boolean		is_seed )
+	
+		throws Exception
+	{
+		MessageDigest sha256 = MessageDigest.getInstance( "SHA-256" );
+					
+		sha256.update( "TorProxyDHT::torrent_hash".getBytes( Constants.UTF_8 ));
+		
+		sha256.update( torrent_hash );
+		
+		byte[] key = sha256.digest();
+			
+		Map payload = new HashMap<>();
+		
+		payload.put( "s", is_seed?1:0 );
+					
+		proxyPut( key, payload );
+	}
+	
+	public void
+	proxyPut(
+		byte[]			key,
+		byte[]			value )
+	
+		throws Exception
+	{
+		Map map = new HashMap<>();
+		
+		map.put( "v", value );
+		
+		proxyPut( key, map );
+	}
+
+	
+	public void
+	proxyPut(
+		byte[]			key,
+		Map				value )
+	
+		throws Exception
+	{
+			// "h", "p" and "z" are reserved
+		
+		if ( value.containsKey("h") || value.containsKey("p")|| value.containsKey( "z" )){
+			
+			throw( new Exception( "Invalid map, uses reserved keys" ));
+		}
+		
+		addRequest( new ProxyRequestPut( key, value ));		
+	}
+	
+	public void
+	proxyGet(
+		byte[]			key )
+	{
+		addRequest( new ProxyRequestGet( key ));		
+	}
+	
+	private void
+	addRequest(
+		ProxyRequest		request )
+	{
+		synchronized( proxy_requests ){
+			
+			Iterator<ProxyRequest> it = proxy_requests.iterator();
+			
+			while( it.hasNext()){
+				
+				ProxyRequest r = it.next();
+				
+				if ( r.getKey().equals( request.getKey())){
+					
+					it.remove();
+				}
+			}
+			
+			proxy_requests.add( request );
+			
+			proxy_requests_sem.release();
+			
+			checkRequestDispatcher();
+		}
+	}
+	
+	private void
+	requestComplete(
+		ProxyRequest		request )
+	{
+		System.out.println( "request completed" );
+		
+		if ( request.getType() == ProxyRequest.RT_GET ){
+			
+			List<Map> values = ((ProxyRequestGet)request).getValues();
+			
+			for ( Map v: values ){
+				
+				v.remove( "h" );
+				
+				System.out.println( "    " + BDecoder.decodeStrings(v));
+			}
+		}
+	}
+	
+	private void
+	requestFailed(
+		ProxyRequest		request )
+	{
+		Debug.out( "need to reschedule request" );
+	}
+	
+	private void
+	checkRequestDispatcher()
+	{
+		if ( proxy_request_dispatcher == null ){
+			
+			if ( active_client_proxy != null ){
+				
+				proxy_request_dispatcher = 
+					new AEThread2( "TPD:rd" )
+					{
+						public void 
+						run()
+						{
+							while( true ){
+								
+								if ( !proxy_requests_sem.reserve( 10*1000)){
+									
+									synchronized( proxy_requests ){
+										
+										if ( proxy_requests.isEmpty()){
+											
+											if ( proxy_request_dispatcher == this ){
+												
+												proxy_request_dispatcher = null;
+												
+												return;
+											}
+										}
+									}
+									
+									continue;
+								}
+								
+								OutboundConnectionProxy	proxy;
+								
+								ProxyRequest 			request;
+								
+								synchronized( proxy_requests ){
+									
+									proxy = active_client_proxy;
+
+									if (	proxy == null ||
+											proxy.getState() != OutboundConnectionProxy.STATE_ACTIVE ||
+											proxy_request_dispatcher != this ){
+										
+										proxy_requests_sem.release();
+										
+										break;
+									}
+																		
+									if ( proxy_requests.isEmpty()){
+										
+										request = null;
+										
+									}else{
+										
+										request = proxy_requests.removeLast();
+									}
+								}
+								
+								if ( request != null ){
+									
+									proxy.addRequest( 
+										request,
+										new ProxyRequestListener()
+										{
+											boolean done = false;
+											
+											@Override
+											public void 
+											complete(
+												ProxyRequest		request )
+											{
+												synchronized( this ){
+													if ( done ){
+														return;
+													}
+													done = true;
+												}
+												requestComplete( request );
+											}
+											
+											@Override
+											public void 
+											failed(
+												ProxyRequest		request )
+											{
+												synchronized( this ){
+													if ( done ){
+														return;
+													}
+													done = true;
+												}
+												requestFailed( request );
+											}
+										});
+								}
+							}
+						}
+					};
+				
+				proxy_request_dispatcher.start();
+			}
+		}else{
+			
+			if ( active_client_proxy == null ){
+				
+				proxy_requests_sem.release();
+				
+				proxy_request_dispatcher = null;
+			}
+		}
+	}
+	
+	private void
+	maskValue(
+		byte[]		torrent_hash,
+		byte[]		masked_value )
+	
+		throws Exception
+	{
+		int	pos = 0;
+		
+		MessageDigest sha256 = MessageDigest.getInstance( "SHA-256" );
+		
+		for ( int i=0;pos<masked_value.length;i++){
+			
+			sha256.update( "TorProxyDHT::mask".getBytes( Constants.UTF_8 ));
+			
+			sha256.update((byte)i);
+			
+			sha256.update( torrent_hash );
+			
+			byte[] value_mask = sha256.digest();
+			
+			for ( int m=0;pos<masked_value.length&&m<value_mask.length;pos++,m++){
+				
+				masked_value[pos] ^= value_mask[m];
+			}
+		}
+	}
+	
+	private Map<String,byte[]> fake_dht = new HashMap<>();
+	
+	private void
+	proxyDHTPut(
+		byte[]		key,
+		byte[]		value )
+	{
+		System.out.println( "DHT PUT" );
+		
+		fake_dht.put( Base32.encode( key ), value );
+	}
+	
+	private List<byte[]>
+	proxyDHTGet(
+		byte[]		key )
+	{
+		System.out.println( "DHT GET" );
+		
+		List<byte[]> values = new ArrayList<>();
+		
+		byte[] value = fake_dht.get( Base32.encode( key ));
+		
+		if ( value != null ){
+			
+			values.add( value );
+		}
+		
+		return( values );
 	}
 	
 	private void
@@ -514,9 +853,12 @@ TorProxyDHT
 			proxy_client_fail_map.put( target_host, "" );
 		}
 		
-		try{			
-			target = InetSocketAddress.createUnresolved( "umklbodffjt4jhjm7ysfoej3nctmtm7yatvbopq2lo32x45am3siddqd.onion", 27657);
-			// target = InetSocketAddress.createUnresolved( "nhrtp6h2o7puwq5ce45f3dfvszal3jeq4d5b3lgjxi72k2x5pspz5mad.onion", 27657);
+		try{	
+			if ( LOOPBACK ){
+			
+				target = InetSocketAddress.createUnresolved( "umklbodffjt4jhjm7ysfoej3nctmtm7yatvbopq2lo32x45am3siddqd.onion", 27657);
+				// target = InetSocketAddress.createUnresolved( "nhrtp6h2o7puwq5ce45f3dfvszal3jeq4d5b3lgjxi72k2x5pspz5mad.onion", 27657);
+			}
 			
 			log( "Trying proxy " + target );
 
@@ -546,11 +888,46 @@ TorProxyDHT
 			
 			failed_client_proxy_retry_count = 0;
 		}
+		
+		synchronized( proxy_requests ){
+		
+			if ( !proxy_client_fail_uids.containsKey( proxy.getUID())){
+				
+				active_client_proxy = proxy;
+				
+				checkRequestDispatcher();
+			}
+		}
+	}
+	
+	private void
+	proxyClientFailed(
+		OutboundConnectionProxy		proxy )
+	{
+		synchronized( proxy_requests ){
+	
+			proxy_client_fail_uids.put( proxy.getUID(), "" );
+			
+			if ( active_client_proxy == proxy ){
+				
+				active_client_proxy = null;
+			}
+			
+			checkRequestDispatcher();
+		}
 	}
 	
 	private void
 	proxyServerSetupComplete(
-		InboundConnection			client )
+		InboundConnectionProxy	proxy,
+		String					instance_id )
+	{
+		
+	}
+	
+	private void
+	proxyServerFailed(
+		InboundConnectionProxy	proxy )
 	{
 		
 	}
@@ -615,6 +992,8 @@ TorProxyDHT
 			
 			OutboundConnectionProxy cp = (OutboundConnectionProxy)connection;
 			
+			proxyClientFailed( cp );
+			
 			InetSocketAddress ias = cp.getAddress();
 			
 			if ( cp.hasBeenActive()){
@@ -639,6 +1018,7 @@ TorProxyDHT
 		
 		if ( was_server_proxy ){
 			
+			proxyServerFailed(( InboundConnectionProxy) connection );
 		}
 	}
 	
@@ -679,13 +1059,18 @@ TorProxyDHT
 		private GenericMessageConnection	gmc;
 		
 		private long	last_received_time	= start_time;
-		private long	last_sent_time		= 0;
+		private long	last_sent_time		= start_time;
 				
 		private long	disconnect_after	= -1;
 		
 		private volatile boolean	connected;
 		
 		private volatile boolean failed;
+		
+		Connection()
+		{
+			log( getName() + ": created" );
+		}
 		
 		protected void
 		setConnection(
@@ -701,10 +1086,14 @@ TorProxyDHT
 		}
 
 		protected void
-		setConnected(
-			boolean b )
+		setConnected()
 		{
-			connected	= b;
+			if ( this instanceof OutboundConnection ){
+			
+				log( getName() + ": connected (" + ( SystemTime.getMonotonousTime() - start_time )/1000 + "s)");
+			}
+			
+			connected	= true;
 		}
 		
 		private void
@@ -731,7 +1120,7 @@ TorProxyDHT
 				
 				Map map = new HashMap<>();
 								
-				send( MT_KEEP_ALIVE, map );
+				send( MT_PROXY_KEEP_ALIVE, map );
 			}
 		}
 		
@@ -765,7 +1154,9 @@ TorProxyDHT
 			
 			map.put( "type", type );
 			
-			if ( type != MT_KEEP_ALIVE ){
+			map.put( "ver", I2PHelperAltNetHandlerTor.LOCAL_VERSION );
+
+			if ( type != MT_PROXY_KEEP_ALIVE ){
 				
 				log( "send " + map );
 			}
@@ -805,7 +1196,11 @@ TorProxyDHT
 								
 				int	type = ((Number)map.get( "type" )).intValue();
 				
-				if ( type != MT_KEEP_ALIVE ){
+				if ( type == MT_PROXY_CLOSE ){
+					
+					disconnect_after = 0;
+					
+				}else if ( type != MT_PROXY_KEEP_ALIVE ){
 				
 					log( "receive " + map );
 
@@ -838,6 +1233,17 @@ TorProxyDHT
 			throws MessageException
 		{
 			failed( error );
+		}
+		
+		protected void
+		closingDown()
+		{
+			if ( connected ){
+			
+				Map map = new HashMap<>();
+				
+				send( MT_PROXY_CLOSE, map );
+			}
 		}
 		
 		protected void
@@ -887,7 +1293,7 @@ TorProxyDHT
 				
 						// unexpected
 					
-					log( "failed: " + Debug.getNestedExceptionMessage(error));
+					log( getName() + " failed: " + Debug.getNestedExceptionMessage(error));
 				}
 				
 				try{
@@ -907,6 +1313,17 @@ TorProxyDHT
 		protected void
 		setClosed()
 		{
+		}
+		
+		protected abstract String
+		getName();
+		
+		protected String
+		getString()
+		{
+			long now = SystemTime.getMonotonousTime();
+			
+			return( getName() + ", idle_in=" + (now - last_received_time)/1000 + "s, idle_out=" + (now - last_sent_time)/1000 + "s");
 		}
 		
 		protected boolean
@@ -966,6 +1383,12 @@ TorProxyDHT
 		{
 			return( AddressUtils.getHostAddress(target));
 		}
+		
+		protected String
+		getString()
+		{
+			return( super.getString() + ": " + getHost());
+		}
 	}
 	
 	private class
@@ -976,11 +1399,17 @@ TorProxyDHT
 		public static final int STATE_ACTIVE		= 1;
 		public static final int STATE_FAILED		= 2;
 		
+		private final String	tep_pure_host;
+		private final int		tep_pure_port;
+		private final byte[]	tep_pure_pk;
+		
 		private final String	uid;
 		
 		private volatile int state	= STATE_INITIALISING;
 		
 		private volatile boolean	has_been_active;
+		
+		private Map<Long,ActiveRequest>		active_requests = new IdentityHashMap<>();
 		
 		private
 		OutboundConnectionProxy(
@@ -989,12 +1418,24 @@ TorProxyDHT
 			throws Exception
 		{
 			super( target );
-							
+				
+			tep_pure_host	= tep_pure.getHost();
+			tep_pure_port	= tep_pure.getPort();
+			
+			tep_pure_pk		= I2PHelperPlugin.TorEndpoint.getPublicKeyBytes( tep_pure_host );
+			
 			byte[] _uid = new byte[32];
 			
 			RandomUtils.nextSecureBytes(_uid);
 						
 			uid = Base32.encode(_uid);
+		}
+		
+		@Override
+		protected String
+		getName()
+		{
+			return( "Proxy out" );
 		}
 		
 		protected String
@@ -1035,20 +1476,108 @@ TorProxyDHT
 			return( has_been_active );
 		}
 		
+		protected void
+		addRequest(
+			ProxyRequest			request,
+			ProxyRequestListener	listener )
+		{
+			ActiveRequest	ar;
+			
+			synchronized( this ){
+				
+				if ( state == STATE_ACTIVE ){
+					
+					ar = new ActiveRequest( request, listener );
+					
+					active_requests.put( request.getSequence(), ar );
+					
+				}else{
+					
+					ar = null;
+				}
+			}
+			
+			if ( ar == null ){
+				
+				listener.failed( request );
+				
+			}else{
+										
+				try{
+					byte[]	key		= request.getKey();
+
+					MessageDigest sha256 = MessageDigest.getInstance( "SHA-256" );
+					
+					sha256.update( "TorProxyDHT::key".getBytes( Constants.UTF_8 ));
+					
+					sha256.update( key );
+					
+					byte[] derived_key = sha256.digest();
+					
+					Map proxy_request = new HashMap<>();
+
+					proxy_request.put( "op_key", derived_key );
+					proxy_request.put( "op_seq", request.getSequence());
+
+					if ( request.getType() == ProxyRequest.RT_PUT ){
+						
+						Map value = ((ProxyRequestPut)request).getValue();
+						
+						value = new HashMap<>( value );	// copy as we add to it
+						
+						value.put( "h", tep_pure_pk );
+						value.put( "p", tep_pure_port );
+
+						byte[] bytes = BEncoder.encode(value);
+						
+						byte[] sig = tep_pure.sign( bytes );
+												
+						value.put( "z", sig );
+				
+						byte[] masked_value = BEncoder.encode( value );
+						
+						maskValue( key, masked_value );
+												
+						proxy_request.put( "op_type", PROXY_OP_PUT );
+						proxy_request.put( "op_value", masked_value );
+											
+					}else if ( request.getType() == ProxyRequest.RT_GET ){
+						
+						proxy_request.put( "op_type", PROXY_OP_GET );
+
+					}else{
+						
+						throw( new Exception( "eh?" ));
+					}
+					
+					send( MT_PROXY_OP_REQUEST, proxy_request );
+
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+					
+					synchronized( this ){
+						
+						active_requests.remove( request.getSequence());
+					}
+					
+					listener.failed( request );
+				}
+			}
+		}
+		
 		@Override
 		public void 
 		connected(
 			GenericMessageConnection connection )
 		{
-			log( "outbound: connected" );
-			
-			setConnected( true );
+			setConnected();
 			
 			try{
 				Map payload = new TreeMap<>();
 				
-				payload.put( "source_host", tep_pure.getHost());
-				payload.put( "source_port", tep_pure.getPort());
+				payload.put( "source_host", tep_pure_host );
+				payload.put( "source_port", tep_pure_port );
 				payload.put( "target", getHost());
 				payload.put( "uid", uid );
 				
@@ -1058,7 +1587,6 @@ TorProxyDHT
 				
 				Map map = new HashMap<>();
 					
-				map.put( "ver", I2PHelperAltNetHandlerTor.LOCAL_VERSION );
 				map.put( "payload", payload );
 				map.put( "sig", sig );
 				
@@ -1116,6 +1644,68 @@ TorProxyDHT
 				
 				close();
 				
+			}else if ( type == MT_PROXY_OP_REPLY ){
+				
+				long seq = ((Number)map.get( "op_seq" )).longValue();
+				
+				ActiveRequest	ar;
+				
+				synchronized( this ){
+					
+					ar = active_requests.remove( seq );
+				}
+				
+				if ( ar == null ){
+					
+					throw( new Exception( "Reply to unknown request received" ));
+				}
+				
+				try{
+					ProxyRequest request = ar.getRequest();
+					
+					int request_type = request.getType();
+					
+					if ( request_type == ProxyRequest.RT_GET ){
+						
+						List<byte[]> l_values = (List<byte[]>)map.get( "op_values" );
+						
+						List<Map> values = new ArrayList<>();
+						
+						for ( byte[] masked_value: l_values ){
+							
+							maskValue( request.getKey(), masked_value );
+							
+							Map value = BDecoder.decode( masked_value );
+							
+							byte[] sig = (byte[])value.remove( "z" );
+							
+							byte[]		host_pk	= (byte[])value.get( "h" );
+							
+							PublicKey source_pk = I2PHelperPlugin.TorEndpoint.getPublicKey( host_pk );
+							
+							byte[] value_bytes = BEncoder.encode( value );
+	
+							if ( I2PHelperPlugin.TorEndpoint.verify( source_pk, value_bytes, sig )){
+								
+									// don't remove "h" as some uses rely on it
+								
+								values.add( value );
+								
+							}else{
+								
+								log( "value verification failed, ignoring" );
+							}
+						}
+						
+						((ProxyRequestGet)request).setValues( values );
+					}
+					
+					ar.getListener().complete( request );
+					
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
 			}else{
 				
 				throw( new Exception( "Unknown message type: " + type ));
@@ -1127,6 +1717,60 @@ TorProxyDHT
 		setClosed()
 		{
 			setState( STATE_FAILED );
+			
+			List<ActiveRequest>	failed_requests;
+			
+			synchronized( this ){
+				
+				failed_requests = new ArrayList<>( active_requests.values());
+				
+				active_requests.clear();
+			}
+			
+			for ( ActiveRequest ar: failed_requests ){
+				
+				try{
+					ar.getListener().failed( ar.getRequest());
+					
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+			}
+		}
+		
+		@Override
+		protected String
+		getString()
+		{
+			return( super.getString() + "; state=" + getState());
+		}
+		
+		private class
+		ActiveRequest
+		{
+			final ProxyRequest			request;
+			final ProxyRequestListener	listener;
+			
+			ActiveRequest(
+				ProxyRequest			_request,
+				ProxyRequestListener	_listener )
+			{
+				request 	= _request;
+				listener	= _listener;
+			}
+			
+			protected ProxyRequest
+			getRequest()
+			{
+				return( request );
+			}
+			
+			protected ProxyRequestListener
+			getListener()
+			{
+				return( listener );
+			}
 		}
 	}
 	
@@ -1136,6 +1780,8 @@ TorProxyDHT
 	{
 		final InboundConnectionProxy	for_connection;
 		final String					uid;
+		
+		protected volatile boolean	success;
 		
 		private
 		OutboundConnectionProxyProbe(
@@ -1154,13 +1800,18 @@ TorProxyDHT
 		}
 		
 		@Override
+		protected String
+		getName()
+		{
+			return( "Probe out" );
+		}
+		
+		@Override
 		public void 
 		connected(
 			GenericMessageConnection connection )
 		{
-			log( "outbound: connected" );
-			
-			setConnected( true );
+			setConnected();
 			
 			try{
 					// we use the probe to at least show that the originator is a real service
@@ -1186,10 +1837,22 @@ TorProxyDHT
 		{
 			if ( type == MT_PROXY_PROBE_REPLY ){
 				
+				success = true;
+				
 				for_connection.setProbeReplyReceived();
 			}
 				
 			close();
+		}
+		
+		@Override
+		protected void 
+		setClosed()
+		{
+			if ( !success ){
+				
+				for_connection.setProbeFailed();
+			}
 		}
 	}
 	
@@ -1201,11 +1864,9 @@ TorProxyDHT
 		InboundConnection(
 			GenericMessageConnection		gmc )
 		{
-			log( "inbound: connected" );
-			
 			setConnection( gmc );
 			
-			setConnected( true );
+			setConnected();
 		}
 				
 		@Override
@@ -1221,6 +1882,14 @@ TorProxyDHT
 	InboundConnectionProxy
 		extends InboundConnection
 	{
+		public static final int STATE_INITIALISING	= 0;
+		public static final int STATE_PROBE_SENT	= 1;
+		public static final int STATE_PROBE_FAILED	= 2;
+		public static final int STATE_ACTIVE		= 3;
+		public static final int STATE_FAILED		= 4;
+				
+		private volatile int state	= STATE_INITIALISING;
+
 		private String		source_host;
 		private PublicKey 	source_pk;
 		
@@ -1230,7 +1899,35 @@ TorProxyDHT
 		{
 			super( gmc );
 		}
-								
+			
+		@Override
+		protected String
+		getName()
+		{
+			return( "Proxy in" );
+		}
+		
+		protected void
+		setState(
+			int		_state )
+		{
+			synchronized( this ){
+				
+				if ( state == STATE_FAILED ){
+					
+					return;
+				}
+				
+				state = _state;
+			}
+		}
+		
+		protected int
+		getState()
+		{
+			return( state );
+		}
+		
 		@Override
 		protected void 
 		receive(
@@ -1287,9 +1984,7 @@ TorProxyDHT
 				if ( too_many ){
 					
 					Map reply = new HashMap<>();
-					
-					reply.put( "ver", I2PHelperAltNetHandlerTor.LOCAL_VERSION );
-					
+										
 					List<Map> l_contacts = new ArrayList<>();
 					
 					reply.put( "contacts", l_contacts );
@@ -1343,7 +2038,47 @@ TorProxyDHT
 				InetSocketAddress source_isa = InetSocketAddress.createUnresolved( source_host, source_port);
 				
 				new OutboundConnectionProxyProbe( this, source_isa, uid );
-								
+				
+				setState( STATE_PROBE_SENT );
+				
+			}else if ( type == MT_PROXY_OP_REQUEST ){
+				
+				int		op_type = ((Number)request.get( "op_type" )).intValue();
+				long	seq		= ((Number)request.get( "op_seq" )).longValue();
+				
+				byte[] key = (byte[])request.get( "op_key" );
+				
+				Map reply = new HashMap<>();
+
+				switch( op_type ){
+				
+					case PROXY_OP_PUT:{
+	
+						byte[] value = (byte[])request.get( "op_value" );
+						
+						proxyDHTPut( key, value );
+												
+						reply.put( "op_seq", seq );
+												
+						break;
+					}
+					case PROXY_OP_GET:{
+							
+						List<byte[]> values = proxyDHTGet( key );
+												
+						reply.put( "op_seq", seq );
+						reply.put( "op_values", values );
+												
+						break;
+					}
+					default:{
+						
+						throw( new Exception( "Invalid op type: " + op_type ));
+					}
+				}
+						
+				send( MT_PROXY_OP_REPLY, reply );
+
 			}else{
 					
 				throw( new Exception( "Invalid message type" ));
@@ -1353,16 +2088,50 @@ TorProxyDHT
 		protected void
 		setProbeReplyReceived()
 		{
-			log( "Proxy server setup complete" );
-			
-			Map map = new HashMap<>();
+			log( "Proxy server setup complete: iid=" + instance_id );
+		
+			setState( STATE_ACTIVE );
+
+			Map reply = new HashMap<>();
 				
-			map.put( "ver", I2PHelperAltNetHandlerTor.LOCAL_VERSION );
-			map.put( "iid", instance_id );
+			reply.put( "iid", instance_id );
 			
-			send( MT_PROXY_ALLOC_OK_REPLY, map );
+			send( MT_PROXY_ALLOC_OK_REPLY, reply );
 			
-			proxyServerSetupComplete( this );
+			proxyServerSetupComplete( this,instance_id );
+		}
+		
+		protected void
+		setProbeFailed()
+		{
+			log( "Probe failed" );
+			
+			setState( STATE_PROBE_FAILED );
+			
+			Map reply = new HashMap<>();
+						
+			List<Map> l_contacts = new ArrayList<>();
+			
+			reply.put( "contacts", l_contacts );
+			
+			send( MT_PROXY_ALLOC_FAIL_REPLY, reply );
+
+				// if we fail immediately the reply doesn't get sent...
+			
+			setDisconnectAfterSeconds( 10 );
+		}
+		
+		@Override
+		protected void 
+		setClosed()
+		{
+			setState( STATE_FAILED );
+		}
+		
+		protected String
+		getString()
+		{
+			return( super.getString() + ": " + source_host + "; state=" + getState());
 		}
 	}
 	
@@ -1378,7 +2147,14 @@ TorProxyDHT
 		{
 			super( gmc );
 		}
-				
+			
+		@Override
+		protected String
+		getName()
+		{
+			return( "Probe in" );
+		}
+		
 		@Override
 		protected void 
 		receive(
@@ -1413,6 +2189,113 @@ TorProxyDHT
 				
 				throw( new Exception( "Invalid message type" ));
 			}
+		}
+	}
+	
+	private interface
+	ProxyRequestListener
+	{
+		public void
+		complete(
+			ProxyRequest	request );
+		
+		public void
+		failed(
+			ProxyRequest	request );
+	}
+	
+	private abstract class
+	ProxyRequest
+	{
+		public static final int RT_PUT			= 1;
+		public static final int RT_GET			= 2;
+		public static final int RT_REMOVE		= 3;
+	
+		private final long			seq	= proxy_request_seq.incrementAndGet();
+		private final byte[]		key;
+		
+		protected
+		ProxyRequest(
+			byte[]		_key )
+		{
+			key		= _key;
+		}
+		
+		protected long
+		getSequence()
+		{
+			return( seq );
+		}
+		
+		protected abstract int
+		getType();
+		
+		protected byte[]
+		getKey()
+		{
+			return( key );
+		}
+	}
+	
+	private class
+	ProxyRequestPut
+		extends ProxyRequest
+	{
+		private final Map	value;
+		
+		protected
+		ProxyRequestPut(
+			byte[]		_key,
+			Map			_value )
+		{
+			super( _key );
+			
+			value = _value;
+		}
+		
+		protected int
+		getType()
+		{
+			return( RT_PUT );
+		}
+		
+		protected Map
+		getValue()
+		{
+			return( value );
+		}
+	}
+	
+	private class
+	ProxyRequestGet
+		extends ProxyRequest
+	{
+		private final List<Map>		values = new ArrayList<>();
+		
+		protected
+		ProxyRequestGet(
+			byte[]		_key )
+		{
+			super( _key );
+		}
+		
+		protected int
+		getType()
+		{
+			return( RT_GET );
+		}
+		
+		protected void
+		setValues(
+			List<Map> v )
+		{
+			values.addAll(v);
+		}
+		
+		protected List<Map>
+		getValues()
+		{
+			return( values );
 		}
 	}
 }
