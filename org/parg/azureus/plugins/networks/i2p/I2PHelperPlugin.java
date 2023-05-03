@@ -24,6 +24,7 @@
 package org.parg.azureus.plugins.networks.i2p;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 
 
@@ -40,6 +41,7 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
+import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
@@ -2582,6 +2584,13 @@ I2PHelperPlugin
 		return( dht_enabled );
 	}
 	
+	@Override
+	public TorProxyDHT 
+	getTorProxyDHT()
+	{
+		return( tor_proxy_dht );
+	}
+	
 	public String
 	getStatusText()
 	{
@@ -3937,8 +3946,19 @@ I2PHelperPlugin
 					byte[] key 		= ("tpd-key:" + bits[1] ).getBytes();
 					byte[] value 	= "I'm the pie".getBytes();
 
-					plugin_maybe_null.tor_proxy_dht.proxyPut( key, value );
+					plugin_maybe_null.tor_proxy_dht.proxyPut( key, value, null );
 					
+				}else if ( cmd.equals( "tpd_del" )){
+
+					if ( bits.length != 2 ){
+						
+						throw( new Exception( "usage: tpd_del <key>"));
+					}
+									
+					byte[] key 		= ("tpd-key:" + bits[1] ).getBytes();
+
+					plugin_maybe_null.tor_proxy_dht.proxyRemove( key );
+
 				}else if ( cmd.equals( "tpd_get" )){
 
 					if ( bits.length != 2 ){
@@ -6362,6 +6382,13 @@ outer:
 				}
 				
 				@Override
+				public TorProxyDHT 
+				getTorProxyDHT()
+				{
+					return( null );
+				}
+				
+				@Override
 				public void
 				tryExternalBootstrap(
 					I2PHelperDHT		dht,
@@ -6577,6 +6604,61 @@ outer:
 			return( host_pk );
 		}
 		
+		public static byte[]
+		onionToBytes(
+			String		host )
+		{
+			int pos = host.lastIndexOf( "." );
+			
+			byte[] host_decode = Base32.decode( pos==-1?host:host.substring( 0, pos ));
+			
+			return( host_decode );
+		}
+		
+		public static String
+		bytesToOnion(
+			byte[]			decode )
+		{
+			return( Base32.encode(decode) + ".onion" );
+		}
+		
+		/*
+		public static String
+		getHost(
+			byte[]		pk_bytes )
+		{
+			try{	
+					// well *f*ck me, SHA3-256 isn't in Java 8
+				
+				MessageDigest digest = MessageDigest.getInstance( "SHA3-256" );
+				
+				digest.update( ".onion checksum".getBytes( Constants.UTF_8 ));
+				
+				digest.update( pk_bytes);
+				
+				digest.update( (byte)3 );
+				
+				byte[] check = digest.digest();
+							
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+
+				baos.write( pk_bytes );
+				
+				baos.write( check, 0, 2 );
+				
+				baos.write( (byte)3 );
+				
+				return( Base32.encode(baos.toByteArray()) + ".onion" );
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+				
+				return( null );
+			}
+		}
+		*/
+		
 		public static PublicKey
 		getPublicKey(
 			String		host )
@@ -6594,6 +6676,13 @@ outer:
 		
 			throws Exception
 		{
+			// if host_pk length > 32 then it also includes checksum and marker
+			
+			if ( host_pk.length > 32 ){
+				
+				host_pk = Arrays.copyOfRange( host_pk, 0, 32 );
+			}
+			
 			return( new EdDSAPublicKey( host_pk ));
 		}
 		

@@ -26,6 +26,7 @@ package org.parg.azureus.plugins.networks.i2p.vuzedht;
 import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.biglybt.core.util.Debug;
 
@@ -281,6 +282,8 @@ I2PHelperAZDHT
 		
 		private boolean	started;
 		
+		private AtomicBoolean done = new AtomicBoolean();
+		
 		private 
 		ListenerWrapper(
 			byte[]							_key,
@@ -353,6 +356,11 @@ I2PHelperAZDHT
 		complete(
 			boolean					timeout )
 		{
+			if ( !done.compareAndSet( false, true )){
+				
+				return;
+			}
+			
 			listener.complete( key, timeout );
 		}
 	};

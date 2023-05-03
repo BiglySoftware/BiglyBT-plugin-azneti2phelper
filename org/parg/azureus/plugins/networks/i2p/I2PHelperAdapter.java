@@ -26,6 +26,8 @@ package org.parg.azureus.plugins.networks.i2p;
 import java.util.List;
 
 import com.biglybt.pif.PluginInterface;
+
+import org.parg.azureus.plugins.networks.i2p.proxydht.TorProxyDHT;
 import org.parg.azureus.plugins.networks.i2p.router.I2PHelperRouterDHT;
 import org.parg.azureus.plugins.networks.i2p.snarkdht.NodeInfo;
 import org.parg.azureus.plugins.networks.i2p.vuzedht.DHTTransportContactI2P;
@@ -44,6 +46,9 @@ I2PHelperAdapter
 	
 	public boolean
 	isDHTEnabled();
+	
+	public TorProxyDHT
+	getTorProxyDHT();
 	
 	public String
 	getMessageText(
