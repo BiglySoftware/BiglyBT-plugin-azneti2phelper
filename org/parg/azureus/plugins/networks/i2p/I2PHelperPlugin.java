@@ -3969,6 +3969,33 @@ I2PHelperPlugin
 					byte[] key 		= ("tpd-key:" + bits[1] ).getBytes();
 
 					plugin_maybe_null.tor_proxy_dht.proxyGet( key );
+				
+				}else if ( cmd.equals( "tpd_tget" )){
+						
+					byte[] torrent_hash = new byte[]{ 0,1,2,3,4,5 };
+
+					plugin_maybe_null.tor_proxy_dht.proxyTrackerGet(
+						torrent_hash, false, 80,
+						new TorProxyDHT.TorProxyDHTListener(){
+							
+							@Override
+							public void 
+							proxyValueRead(
+								InetSocketAddress originator, 
+								boolean is_seed, 
+								boolean crypto_required )
+							{
+								System.out.println( originator + "/" + is_seed + "/" + crypto_required );
+							}
+							
+							@Override
+							public void 
+							proxyComplete(
+								byte[] key, boolean timeout)
+							{
+								System.out.println( "tpd_tget complete" );
+							}
+						});
 
 				}else{
 			

@@ -18,6 +18,7 @@
 
 package org.parg.azureus.plugins.networks.i2p.proxydht;
 
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.security.MessageDigest;
 import java.security.PublicKey;
@@ -45,6 +46,7 @@ import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.CopyOnWriteList;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.RandomUtils;
+import com.biglybt.core.util.SHA1Hasher;
 import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.TimerEvent;
@@ -66,6 +68,7 @@ import com.biglybt.pif.utils.PooledByteBuffer;
 import com.biglybt.plugin.dht.DHTPluginContact;
 import com.biglybt.plugin.dht.DHTPluginInterface;
 import com.biglybt.plugin.dht.DHTPluginOperationAdapter;
+import com.biglybt.plugin.dht.DHTPluginOperationListener;
 import com.biglybt.plugin.dht.DHTPluginValue;
 
 import net.i2p.data.Base32;
@@ -98,8 +101,11 @@ TorProxyDHT
 	
 	private static final int MAX_SERVER_PROXIES	= 4;
 	
-	private static final int MAX_KEY_STATE			= 256;
+	private static final int MAX_PROXY_KEY_STATE			= 256;
+	private static final int MAX_GLOBAL_KEY_STATE			= MAX_PROXY_KEY_STATE * MAX_SERVER_PROXIES;
 
+	private final Method method_DHTPluginInterface_put;
+	
 	private final I2PHelperPlugin		plugin;
 	private final PluginInterface		plugin_interface;
 	
@@ -189,6 +195,18 @@ TorProxyDHT
 		plugin = _plugin;
 		
 		plugin_interface = plugin.getPluginInterface();
+		
+		Method method = null;
+		
+		try{		
+			method = DHTPluginInterface.class.getMethod( 
+						"put", 
+						byte[].class, String.class, byte[].class, short.class, boolean.class, DHTPluginOperationListener.class );
+			
+		}catch( Throwable e ){
+		}
+		
+		method_DHTPluginInterface_put = method;
 		
 		byte[] temp = new byte[8];
 		
@@ -288,39 +306,41 @@ TorProxyDHT
 							checkRequestTimeouts();
 							
 							long now = SystemTime.getMonotonousTime();
-
-							if ( ENABLE_LOGGING ){
-								
-								printLocalKeyState();
-							
-								if ( tick_count % 6 == 0 ){
-									
-									OutboundConnectionProxy ccp = current_client_proxy;
-									
-									String ccp_str;
-									
-									if ( ccp == null ){
-										
-										ccp_str = "";
-										
-									}else{
-										
-										ccp_str = ", " + ccp.getString();
-									}
-									
-									log( "con=" + connections.size() + ccp_str );
-									
-									for ( InboundConnection sp: server_proxies ){
-										
-										log( "    " + sp.getString());
-									}
-								}
-							}
 							
 							checkClientProxy( true );
 							
 							if ( tick_count % 3 == 0 ){
 								
+								if ( ENABLE_LOGGING ){
+									
+									printGlobalKeyState();
+									
+									printLocalKeyState();
+								
+									if ( tick_count % 6 == 0 ){
+										
+										OutboundConnectionProxy ccp = current_client_proxy;
+										
+										String ccp_str;
+										
+										if ( ccp == null ){
+											
+											ccp_str = "";
+											
+										}else{
+											
+											ccp_str = ", " + ccp.getString();
+										}
+										
+										log( "con=" + connections.size() + ccp_str );
+										
+										for ( InboundConnection sp: server_proxies ){
+											
+											log( "    " + sp.getString());
+										}
+									}
+								}
+
 								checkServerProxies();
 								
 								for ( Connection con: connections ){
@@ -341,6 +361,8 @@ TorProxyDHT
 							if ( tick_count % REPUBLISH_CHECK_TICKS == 0 ){
 								
 								checkRepublish();
+								
+								checkGlobalKeyState();
 							}
 						}
 					});
@@ -349,7 +371,7 @@ TorProxyDHT
 			
 			byte[] torrent_hash = new byte[]{ 0,1,2,3,4,5 };
 				
-			proxyTrackerAnnounce( torrent_hash, true );
+			proxyTrackerAnnounce( torrent_hash, RandomUtils.nextInt(2)==1 );
 			
 		}catch( Throwable e ){
 			
@@ -613,11 +635,10 @@ TorProxyDHT
 	LocalKeyState
 	{
 		private ProxyLocalRequest	pending_request;
-		private boolean			has_active_request;
+		private boolean				has_active_request;
 		
-		private long			last_ok_time;
+		private long				last_ok_time;
 		private ProxyLocalRequest	last_ok_request;
-		private String			last_ok_proxy_iid;
 	}
 	
 	private ByteArrayHashMap<LocalKeyState>	local_key_state = new ByteArrayHashMap<>();
@@ -634,7 +655,7 @@ TorProxyDHT
 				LocalKeyState lks = local_key_state.get( key );
 				
 				String str = "pend=" + lks.pending_request + ", act=" + lks.has_active_request + 
-						", lok=" + lks.last_ok_request + ", liid=" + lks.last_ok_proxy_iid;
+						", lok=" + (lks.last_ok_request==null?"":lks.last_ok_request.getSequence());
 						
 				log( "    " + ByteFormatter.encodeString(key,0,Math.min(key.length,8)) + " -> " + str );
 			}
@@ -675,7 +696,7 @@ TorProxyDHT
 					
 				}else{
 					
-					if ( local_key_state.size() >= MAX_KEY_STATE && request_type == ProxyLocalRequest.RT_PUT ){
+					if ( local_key_state.size() >= MAX_PROXY_KEY_STATE && request_type == ProxyLocalRequest.RT_PUT ){
 						
 						Debug.out( "Key state size exceeded" );
 						
@@ -691,14 +712,7 @@ TorProxyDHT
 				
 				if ( !lks.has_active_request ){
 					
-					if ( request_type == ProxyLocalRequest.RT_REMOVE ){
-						
-						local_key_state.remove( key );
-						
-					}else{
-					
-						queue_request = true;
-					}
+					queue_request = true;
 				}
 			}
 
@@ -716,9 +730,9 @@ TorProxyDHT
 	private void
 	requestComplete(
 		OutboundConnectionProxy		proxy,
-		ProxyLocalRequest				request )
+		ProxyLocalRequest			request )
 	{
-		log( "request complete:" + request );
+		log( "request complete:" + request.getSequence());
 		
 		if ( request.getType() == ProxyLocalRequest.RT_GET ){
 			
@@ -747,7 +761,6 @@ TorProxyDHT
 					
 					lks.last_ok_time		= SystemTime.getMonotonousTime();
 					lks.last_ok_request 	= request;
-					lks.last_ok_proxy_iid	= proxy.getRemoteInstanceID();
 					
 					if ( lks.pending_request != null ){
 						
@@ -773,7 +786,7 @@ TorProxyDHT
 	requestFailed(
 		ProxyLocalRequest				request )
 	{
-		log( "request failed:" + request );
+		log( "request failed:" + request.getSequence());
 		
 		if ( request.getType() == ProxyLocalRequest.RT_GET ){
 			
@@ -840,13 +853,15 @@ TorProxyDHT
 				
 				LocalKeyState lks = local_key_state.get( key );
 				
-				if ( lks.pending_request == null && !lks.has_active_request && lks.last_ok_time > 0){
+				if ( lks.pending_request == null && !lks.has_active_request && lks.last_ok_time > 0 ){
 					
 					long elapsed = now - lks.last_ok_time;
 					
 					if ( elapsed > DHTControl.ORIGINAL_REPUBLISH_INTERVAL_DEFAULT ){
 						
-						if ( !iid.equals( lks.last_ok_proxy_iid )){
+						// always republish, we use put-and-forget
+						
+						//if ( !iid.equals( lks.last_ok_proxy_iid )){
 							
 							lks.pending_request = lks.last_ok_request;
 							
@@ -855,7 +870,7 @@ TorProxyDHT
 							proxy_requests_sem.release();
 							
 							added = true;
-						}
+						//}
 					}
 				}
 			}
@@ -1163,6 +1178,8 @@ TorProxyDHT
 				server_proxies.remove( sp);
 				
 			}else{
+				
+				// sp.failed( new Exception("test close"));
 				
 				sp.checkRequests();
 			}
@@ -2222,57 +2239,59 @@ TorProxyDHT
 				
 				if ( ar == null ){
 					
-					throw( new Exception( "Reply to unknown request received" ));
-				}
+					// ignore, request might have timed out
+					
+				}else{
 				
-				try{
-					ProxyLocalRequest request = ar.getProxyRequest();
-					
-					int request_type = request.getType();
-					
-					if ( request_type == ProxyLocalRequest.RT_GET ){
+					try{
+						ProxyLocalRequest request = ar.getProxyRequest();
 						
-						List<byte[]> l_values = (List<byte[]>)map.get( "op_values" );
+						int request_type = request.getType();
 						
-						List<Map> values = new ArrayList<>();
-						
-						for ( byte[] masked_value: l_values ){
+						if ( request_type == ProxyLocalRequest.RT_GET ){
 							
-							maskValue( request.getKey(), masked_value );
+							List<byte[]> l_values = (List<byte[]>)map.get( "op_values" );
 							
-							Map value = BDecoder.decode( masked_value );
+							List<Map> values = new ArrayList<>();
 							
-							byte[]	sig = (byte[])value.remove( "z" );
-							
-							byte[]	host_bytes	= (byte[])value.get( "h" );
-							
-							PublicKey source_pk = I2PHelperPlugin.TorEndpoint.getPublicKey( host_bytes );
-							
-							byte[] value_bytes = BEncoder.encode( value );
-	
-							if ( I2PHelperPlugin.TorEndpoint.verify( source_pk, value_bytes, sig )){
+							for ( byte[] masked_value: l_values ){
 								
-									// don't remove "h" as some uses rely on it, replace with
-									// actual host
+								maskValue( request.getKey(), masked_value );
 								
-								value.put( "h", I2PHelperPlugin.TorEndpoint.bytesToOnion( host_bytes ));
+								Map value = BDecoder.decode( masked_value );
 								
-								values.add( value );
+								byte[]	sig = (byte[])value.remove( "z" );
 								
-							}else{
+								byte[]	host_bytes	= (byte[])value.get( "h" );
 								
-								log( "value verification failed, ignoring" );
+								PublicKey source_pk = I2PHelperPlugin.TorEndpoint.getPublicKey( host_bytes );
+								
+								byte[] value_bytes = BEncoder.encode( value );
+		
+								if ( I2PHelperPlugin.TorEndpoint.verify( source_pk, value_bytes, sig )){
+									
+										// don't remove "h" as some uses rely on it, replace with
+										// actual host
+									
+									value.put( "h", I2PHelperPlugin.TorEndpoint.bytesToOnion( host_bytes ));
+									
+									values.add( value );
+									
+								}else{
+									
+									log( "value verification failed, ignoring" );
+								}
 							}
+							
+							((ProxyLocalRequestGet)request).setValues( values );
 						}
 						
-						((ProxyLocalRequestGet)request).setValues( values );
+						ar.setComplete();
+						
+					}catch( Throwable e ){
+						
+						Debug.out( e );
 					}
-					
-					ar.setComplete();
-					
-				}catch( Throwable e ){
-					
-					Debug.out( e );
 				}
 			}else{
 				
@@ -2468,6 +2487,12 @@ TorProxyDHT
 	public interface
 	ProxyRemoteRequestListener
 	{
+		public default void
+		complete()
+		{
+			complete( null );
+		}
+		
 		public void
 		complete(
 			List<byte[]>	values );
@@ -2564,7 +2589,7 @@ TorProxyDHT
 			}
 
 			try{
-				listener.complete( null );
+				listener.complete();
 				
 			}catch( Throwable e ){
 				
@@ -2573,6 +2598,517 @@ TorProxyDHT
 			
 			proxy.remoteRequestComplete( this );
 		}
+	}
+	
+	private final ByteArrayHashMap<Long>	dht_key_state = new ByteArrayHashMap<>();
+		
+	private final LinkedList<DHTRemoteRequest>[]		dht_remote_queued = new LinkedList[2];
+	private final ByteArrayHashMap<DHTRemoteRequest>[]	dht_remote_active = new ByteArrayHashMap[2];
+	
+	{
+		dht_remote_queued[0] = new LinkedList<>();
+		dht_remote_queued[1] = new LinkedList<>();
+		
+		dht_remote_active[0] = new ByteArrayHashMap<>();
+		dht_remote_active[1] = new ByteArrayHashMap<>();
+	}
+	
+	private final int[] DHT_REMOTE_MAX_ACTIVE_REQUESTS = { 16, 16 };
+
+	private void
+	printGlobalKeyState()
+	{
+		String str = "";
+		
+		synchronized( dht_key_state ){
+			
+			str = "GKS size=" + dht_key_state.size() + 
+					", active=" + dht_remote_active[0].size() + "/" + dht_remote_active[1].size() +
+					", queued=" + dht_remote_queued[0].size() + "/" + dht_remote_queued[1].size();
+		}
+		
+		log( str );
+	}
+	
+	private void
+	checkGlobalKeyState()
+	{
+		long now = SystemTime.getMonotonousTime();
+		
+		synchronized( dht_key_state ){
+			
+			for ( byte[] key: dht_key_state.keys()){
+				
+				long elapsed = now - dht_key_state.get( key );
+				
+				if ( elapsed > DHTControl.ORIGINAL_REPUBLISH_INTERVAL_DEFAULT ){
+
+					dht_key_state.remove( key );
+				}
+			}
+		}
+	}
+	
+	private abstract class
+	DHTRemoteRequest
+	{
+		protected final byte[]		op_key;
+		protected final int			type;
+		
+		protected final List<ProxyRemoteRequest>			requests = new ArrayList<>();
+		protected final List<ProxyRemoteRequestListener>	listeners = new ArrayList<>();
+		
+		DHTRemoteRequest(
+			ProxyRemoteRequest			_request,
+			ProxyRemoteRequestListener	_listener,
+			byte[]						_op_key,
+			int							_type )
+		{
+			op_key		= _op_key;
+			type		= _type;
+			
+			requests.add( _request );
+			listeners.add( _listener );
+		}
+		
+		private void
+		addRequest(
+			DHTRemoteRequest	request )
+		{
+			requests.addAll( request.requests );
+			
+			listeners.addAll( request.listeners );
+		}
+		
+		private boolean
+		isDead()
+		{
+			for ( ProxyRemoteRequest req: requests ){
+				
+				if ( req.getProxy().getState() == InboundConnectionProxy.STATE_ACTIVE ){
+					
+					return( true );
+				}
+			}
+			
+			return( false );
+		}
+		
+		protected void
+		queue()
+		{
+			boolean request_queued;
+			
+			LinkedList<DHTRemoteRequest>		queued = dht_remote_queued[ type ];
+			ByteArrayHashMap<DHTRemoteRequest>	active = dht_remote_active[ type ];
+
+			synchronized( dht_key_state ){
+				
+				if ( dht_key_state.size() > MAX_GLOBAL_KEY_STATE ){
+					
+					request_queued = false;
+					
+				}else{
+					
+					request_queued = true;
+					
+					DHTRemoteRequest active_request = active.get( op_key );
+					
+					if ( active_request != null ){
+						
+						active_request.addRequest( this );
+						
+					}else{
+						
+						if ( active.size() < DHT_REMOTE_MAX_ACTIVE_REQUESTS[ type ]){
+							
+							active.put( op_key, this );
+													
+							try{
+								execute();
+								
+							}catch( Throwable e ){
+								
+								Debug.out( e );
+							}
+							
+						}else{
+							
+							boolean done = false;
+							
+							Iterator<DHTRemoteRequest> it = queued.iterator();
+							
+							while( it.hasNext()){
+								
+								DHTRemoteRequest req = it.next();
+								
+								if ( req.isDead()){
+									
+									it.remove();
+									
+								}else{
+									
+									if ( Arrays.equals( req.op_key, op_key )){
+										
+										req.addRequest( this );
+										
+										done = true;
+										
+										break;
+									}
+								}
+							}
+							
+							if ( !done ){
+								
+								queued.addLast( this );
+							}
+						}
+					}
+				}
+			}
+			
+			if ( !request_queued ){
+				
+				listeners.get(0).complete( new ArrayList<>(0));
+			}
+		}
+		
+		protected void
+		completed()
+		{
+			completed( null );
+		}
+		
+		protected void
+		completed(
+			List<byte[]>	values )
+		{
+			LinkedList<DHTRemoteRequest>		queued = dht_remote_queued[ type ];
+			ByteArrayHashMap<DHTRemoteRequest>	active = dht_remote_active[ type ];
+
+			List<ProxyRemoteRequest>			todo_requests;
+			List<ProxyRemoteRequestListener>	todo_listeners;
+			
+			synchronized( dht_key_state ){
+		
+				todo_requests	= new ArrayList<>( requests );
+				todo_listeners	= new ArrayList<>( listeners );
+
+				active.remove( op_key );
+										
+				while( !queued.isEmpty()){
+					
+					try{
+						DHTRemoteRequest next = queued.removeFirst();
+						
+						if ( next.isDead()){
+							
+							continue;
+						}
+						
+						active.put( next.op_key, next );
+						
+						next.execute();
+						
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+			}
+				
+			for ( int i=0; i<todo_requests.size(); i++ ){
+				
+				if ( todo_requests.get(i).getProxy().getState() == InboundConnectionProxy.STATE_ACTIVE ){
+					
+					try{
+						if ( values == null ){
+
+							todo_listeners.get(i).complete();
+							
+						}else{
+							
+							todo_listeners.get(i).complete( values );
+						}
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+			}
+		}
+		
+		protected abstract void
+		execute();
+	}
+	
+	private class
+	DHTRemoteRequestPut
+		extends DHTRemoteRequest
+	{
+		private final byte[]		masked_key;
+		private final byte[]		value;
+		private final byte			flags;
+		
+		DHTRemoteRequestPut(
+			ProxyRemoteRequest			_request,
+			ProxyRemoteRequestListener	_listener,
+			byte[]						_op_key,
+			byte[]						_masked_key,
+			byte[]						_value,
+			byte						_flags )
+		{
+			super( _request, _listener, _op_key, 1 );
+			
+			masked_key		= _masked_key;
+			value			= _value;
+			flags			= _flags;
+			
+			queue();
+		}
+		
+		protected void
+		execute()
+		{
+			DHTPluginInterface dht = ddb.getDHTPlugin();
+			
+			synchronized( dht_key_state ){
+
+				dht_key_state.put( masked_key, SystemTime.getMonotonousTime());
+			}
+			
+			DHTPluginOperationListener listener = 
+				new DHTPluginOperationAdapter()
+				{
+					@Override
+					public void 
+					complete(
+						byte[]		masked_key, 
+						boolean		timeout_occurred )
+					{
+						synchronized( dht_key_state ){
+	
+							dht_key_state.put( masked_key, SystemTime.getMonotonousTime());
+						}
+						
+						completed();
+					}
+				};
+			
+			boolean done = false;
+				
+			if ( method_DHTPluginInterface_put != null ){
+				
+				short s_flags = (short)( flags | 0x0100 ); // DHTPluginInterface.FLAG_PUT_AND_FORGET
+				
+				try{
+					method_DHTPluginInterface_put.invoke(
+						dht,
+						masked_key, 
+						"TPD write: " + ByteFormatter.encodeString( masked_key ), 
+						value, 
+						s_flags, 
+						true,
+						listener );
+					
+					done = true;
+					
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+			}
+			
+			if ( !done ){
+				
+				dht.put( 
+					masked_key , 
+					"TPD write: " + ByteFormatter.encodeString( masked_key ), 
+					value, 
+					flags, 
+					listener );
+			}
+		}
+	}
+	
+	private class
+	DHTRemoteRequestGet
+		extends DHTRemoteRequest
+	{
+		private final byte[]		masked_key;
+		private final byte			flags;
+		private final int			num_want;
+		private final long			timeout;
+		
+		DHTRemoteRequestGet(
+			ProxyRemoteRequest			_request,
+			ProxyRemoteRequestListener	_listener,
+			byte[]						_op_key,
+			byte[]						_masked_key,
+			byte						_flags,
+			int							_num_want,
+			long						_timeout )
+		{
+			super( _request, _listener, _op_key, 0 );
+			
+			masked_key		= _masked_key;
+			flags			= _flags;
+			num_want		= _num_want;
+			timeout			= _timeout;
+			
+			queue();
+		}
+		
+		protected void
+		execute()
+		{
+			DHTPluginInterface dht = ddb.getDHTPlugin();
+			
+			dht.get(
+					masked_key, 
+					"TPD read: " + ByteFormatter.encodeString(masked_key), 
+					flags,
+					num_want,
+					timeout,
+					false, false,
+					new DHTPluginOperationAdapter()
+					{
+						ByteArrayHashMap<String>	result = new ByteArrayHashMap<>();
+						
+						@Override
+						public void 
+						valueRead(
+							DHTPluginContact	originator, 
+							DHTPluginValue		value )
+						{
+							synchronized( result ){
+							
+								result.put( value.getValue(), "");
+							}
+						}
+						
+						@Override
+						public void 
+						complete(
+							byte[]		masked_key, 
+							boolean		timeout_occurred )
+						{
+							List<byte[]> res;
+							
+							synchronized( result ){
+								
+								 res = new ArrayList<byte[]>( result.keys());
+							}
+							
+							completed( res );
+						}
+					});
+		}
+	}
+	
+	private class
+	DHTRemoteRequestRemove
+		extends DHTRemoteRequest
+	{
+		private final byte[]		masked_key;
+		
+		DHTRemoteRequestRemove(
+			ProxyRemoteRequest			_request,
+			ProxyRemoteRequestListener	_listener,
+			byte[]						_op_key,
+			byte[]						_masked_key )
+		{
+			super( _request, _listener, _op_key, 1 );
+			
+			masked_key		= _masked_key;
+			
+			queue();
+		}
+		
+		protected void
+		execute()
+		{
+			DHTPluginInterface dht = ddb.getDHTPlugin();
+
+			dht.remove( 
+					masked_key, 
+					"TPD remove: " + ByteFormatter.encodeString(masked_key), 
+					new DHTPluginOperationAdapter()
+					{
+						@Override
+						public void 
+						complete(
+							byte[]		masked_key, 
+							boolean		timeout_occurred )
+						{
+							synchronized( dht_key_state ){
+
+								dht_key_state.remove( masked_key );
+							}
+							
+							completed();
+						}
+					});
+		}
+	}
+	
+	private void
+	executeRemotePut(
+		ProxyRemoteRequest			request,
+		byte[]						masked_key,
+		byte[]						value,
+		byte						flags,
+		ProxyRemoteRequestListener	listener )
+	{
+		SHA1Hasher sha1 = new SHA1Hasher();
+		
+		sha1.update( "Put".getBytes());
+		sha1.update( masked_key );
+		sha1.update( value );
+		sha1.update(new byte[]{ flags });
+		
+		byte[] op_key = sha1.getDigest();
+		
+		new DHTRemoteRequestPut( request, listener, op_key, masked_key, value, flags );
+	}
+	
+	private void
+	executeRemoteGet(
+		ProxyRemoteRequest			request,
+		byte[]						masked_key,
+		byte						flags,
+		int							num_want,
+		long						timeout,
+		ProxyRemoteRequestListener	listener )
+	{
+		SHA1Hasher sha1 = new SHA1Hasher();
+		
+		sha1.update( "Get".getBytes());
+		sha1.update( masked_key );
+		sha1.update( new byte[]{ flags });
+		//sha1.update( String.valueOf(num_want).getBytes());
+		//sha1.update( String.valueOf(timeout).getBytes());
+	
+		byte[] op_key = sha1.getDigest();
+		
+		new DHTRemoteRequestGet( request, listener, op_key, masked_key, flags, num_want, timeout );
+	}
+	
+	private void
+	executeRemoteRemove(
+		ProxyRemoteRequest			request,
+		byte[]						masked_key,
+		ProxyRemoteRequestListener	listener )
+	{
+		SHA1Hasher sha1 = new SHA1Hasher();
+		
+		sha1.update( "Rem".getBytes());
+		sha1.update( masked_key );
+		
+		byte[] op_key = sha1.getDigest();
+		
+		new DHTRemoteRequestRemove( request, listener, op_key, masked_key );
 	}
 	
 	private class
@@ -2600,8 +3136,6 @@ TorProxyDHT
 		execute()
 		{
 			try{
-				DHTPluginInterface dht = ddb.getDHTPlugin();
-								
 				byte	flags = DHTPluginInterface.FLAG_SINGLE_VALUE | DHTPluginInterface.FLAG_ANON;
 				
 				if ( options != null ){
@@ -2630,22 +3164,8 @@ TorProxyDHT
 
 				getProxy().addKeyState( original_key );
 
-				dht.put( 
-					masked_key, 
-					"TPD write: " + ByteFormatter.encodeString(masked_key), 
-					value, 
-					flags, 
-					new DHTPluginOperationAdapter()
-					{
-						@Override
-						public void 
-						complete(
-							byte[]		masked_key, 
-							boolean		timeout_occurred )
-						{
-							requestComplete();
-						}
-					});
+				executeRemotePut( this, masked_key, value, flags, (values)->requestComplete());
+				
 			}catch( Throwable  e ){
 				
 				Debug.out(e);
@@ -2706,9 +3226,7 @@ TorProxyDHT
 					requestFailed();
 					
 				}else{
-					
-					DHTPluginInterface dht = ddb.getDHTPlugin();
-					
+										
 					byte	flags		= 0;
 					int		num_want	= 32;
 					
@@ -2748,38 +3266,7 @@ TorProxyDHT
 					
 					byte[] masked_key = sha256.digest();
 
-					dht.get(
-						masked_key, 
-						"TPD read: " + ByteFormatter.encodeString(masked_key), 
-						flags,
-						num_want,
-						timeout,
-						false, false,
-						new DHTPluginOperationAdapter()
-						{
-							ByteArrayHashMap<String>	result = new ByteArrayHashMap<>();
-							
-							@Override
-							public void 
-							valueRead(
-								DHTPluginContact	originator, 
-								DHTPluginValue		value )
-							{
-								synchronized( result ){
-								
-									result.put( value.getValue(), "");
-								}
-							}
-							
-							@Override
-							public void 
-							complete(
-								byte[]		masked_key, 
-								boolean		timeout_occurred )
-							{
-								requestComplete( new ArrayList<byte[]>( result.keys()));
-							}
-						});
+					executeRemoteGet( this, masked_key, flags, num_want, timeout, (values)->requestComplete( values ));
 				}
 			}catch( Throwable  e ){
 				
@@ -2806,9 +3293,7 @@ TorProxyDHT
 		protected void
 		execute()
 		{
-			try{
-				DHTPluginInterface dht = ddb.getDHTPlugin();
-				
+			try{				
 				byte[] original_key = getKey();
 				
 				MessageDigest sha256 = MessageDigest.getInstance( "SHA-256" );
@@ -2819,22 +3304,12 @@ TorProxyDHT
 				
 				byte[] masked_key = sha256.digest();
 				
-				dht.remove( 
-					masked_key, 
-					"TPD remove: " + ByteFormatter.encodeString(masked_key), 
-					new DHTPluginOperationAdapter()
-					{
-						@Override
-						public void 
-						complete(
-							byte[]		masked_key, 
-							boolean		timeout_occurred )
-						{
-							requestComplete();
-							
-							getProxy().removeKeyState( original_key );
-						}
-					});
+				executeRemoteRemove( this, masked_key, (values)->{
+					
+					requestComplete();
+					
+					getProxy().removeKeyState( original_key );
+				});
 				
 			}catch( Throwable  e ){
 				
@@ -2845,6 +3320,20 @@ TorProxyDHT
 		}
 	}
 	
+	private final int MAX_SAVED_REMOTE_KEY_STATE = 16;
+	
+	private Map<String,Object[]>		saved_remote_key_state = 
+			new LinkedHashMap<String,Object[]>(MAX_SAVED_REMOTE_KEY_STATE,0.75f,true)
+			{
+				@Override
+				protected boolean
+				removeEldestEntry(
+			   		Map.Entry<String,Object[]> eldest) 
+				{
+					return size() > MAX_SAVED_REMOTE_KEY_STATE;
+				}
+			};
+			
 	private class
 	InboundConnectionProxy
 		extends InboundConnection
@@ -2857,9 +3346,31 @@ TorProxyDHT
 				
 		private volatile int state	= STATE_INITIALISING;
 
+		private int			version;
+		private int			min_version;
+		
 		private String		source_host;
 		private PublicKey 	source_pk;
 		
+		
+		private ByteArrayHashMap<String>	remote_key_state = new ByteArrayHashMap<>();
+
+			// get requests at index 0, others index 1
+
+		private LinkedList<ProxyRemoteRequest>[]	queued_requests = new LinkedList[2];
+
+		{
+			queued_requests[0] = new LinkedList<>();
+			queued_requests[1] = new LinkedList<>();
+		}
+
+		private int[]	active_request_count	= { 0, 0 };
+
+		private final int[] MAX_ACTIVE_REQUESTS = { 16, 16 };
+
+		private final int MAX_QUEUED_REQUESTS	= 128;
+
+	
 		private
 		InboundConnectionProxy(
 			GenericMessageConnection		gmc )
@@ -2895,6 +3406,45 @@ TorProxyDHT
 			return( state );
 		}
 		
+		private List<Map>
+		getBackupContacts()
+		{
+			List<Map> l_contacts = new ArrayList<>();
+
+			DHTTransportAlternativeNetwork net = DHTUDPUtils.getAlternativeNetwork( DHTTransportAlternativeNetwork.AT_TOR );
+			
+			if ( net != null ){
+			
+				List<DHTTransportAlternativeContact> contacts = DHTUDPUtils.getAlternativeContacts( DHTTransportAlternativeNetwork.AT_TOR, 16 );
+
+				Collections.shuffle( contacts );
+					
+				for ( DHTTransportAlternativeContact contact: contacts ){
+												
+					int contact_version = contact.getVersion();
+					
+					if ( contact_version == 0 || contact_version >= min_version ){
+						
+						Map m = new HashMap<>();
+						
+						InetSocketAddress isa = net.getNotionalAddress( contact );
+						
+						m.put( "host", AddressUtils.getHostAddress( isa ));
+						m.put( "port", isa.getPort());
+						
+						l_contacts.add( m );								
+						
+						if ( l_contacts.size() == 5 ){
+							
+							break;
+						}
+					}
+				}
+			}
+			
+			return( l_contacts );
+		}
+		
 		@Override
 		protected void 
 		receive(
@@ -2912,11 +3462,11 @@ TorProxyDHT
 				
 				Number i_ver = (Number)request.get( "ver" );
 				
-				int ver = i_ver==null?1:i_ver.intValue();
+				version = i_ver==null?1:i_ver.intValue();
 				
 				Number i_min_ver = (Number)request.get( "min_ver" );
 
-				int min_ver = i_min_ver==null?1:i_min_ver.intValue();
+				min_version = i_min_ver==null?1:i_min_ver.intValue();
 				
 				Map payload_raw = (Map)request.get( "payload" );
 												
@@ -2936,11 +3486,13 @@ TorProxyDHT
 				
 				boolean denied = false;
 				
-				if ( min_ver > I2PHelperAltNetHandlerTor.LOCAL_VERSION ){
+				if ( min_version > I2PHelperAltNetHandlerTor.LOCAL_VERSION ){
 					
 					denied = true;
 					
 				}else{
+					
+					InboundConnectionProxy dead_proxy = null;
 					
 					synchronized( connections ){
 						
@@ -2954,53 +3506,33 @@ TorProxyDHT
 								
 								if ( source_host.equals( sp.source_host )){
 									
-									throw( new Exception( "Duplicate proxy" ));
+										// assume that the connection has failed on the existing 
+										// proxy but we haven't noticed yet whereas the 
+										// client has and is attempting to reconnect
+									
+									log( "Duplicate proxy for " + source_host + ", replacing" );
+									
+									server_proxies.remove( sp );
+									
+									dead_proxy = sp;
 								}
 							}
 							
 							server_proxies.add( this );
 						}
 					}
+					
+					if ( dead_proxy != null ){
+						
+						dead_proxy.failed( new Exception( "Dead Proxy" ));
+					}
 				}
 				
 				if ( denied ){
 					
 					Map reply = new HashMap<>();
-										
-					List<Map> l_contacts = new ArrayList<>();
-					
-					reply.put( "contacts", l_contacts );
-
-					DHTTransportAlternativeNetwork net = DHTUDPUtils.getAlternativeNetwork( DHTTransportAlternativeNetwork.AT_TOR );
-					
-					if ( net != null ){
-					
-						List<DHTTransportAlternativeContact> contacts = DHTUDPUtils.getAlternativeContacts( DHTTransportAlternativeNetwork.AT_TOR, 16 );
-
-						Collections.shuffle( contacts );
-							
-						for ( DHTTransportAlternativeContact contact: contacts ){
-														
-							int contact_version = contact.getVersion();
-							
-							if ( contact_version == 0 || contact_version >= min_ver ){
-								
-								Map m = new HashMap<>();
-								
-								InetSocketAddress isa = net.getNotionalAddress( contact );
-								
-								m.put( "host", AddressUtils.getHostAddress( isa ));
-								m.put( "port", isa.getPort());
-								
-								l_contacts.add( m );								
-								
-								if ( l_contacts.size() == 5 ){
-									
-									break;
-								}
-							}
-						}
-					}
+															
+					reply.put( "contacts", getBackupContacts());
 					
 					send( MT_PROXY_ALLOC_FAIL_REPLY, reply );
 
@@ -3032,6 +3564,11 @@ TorProxyDHT
 				setState( STATE_PROBE_SENT );
 				
 			}else if ( type == MT_PROXY_OP_REQUEST ){
+				
+				if ( getState() != STATE_ACTIVE ){
+					
+					throw( new Exception( "OP received when inactive" ));
+				}
 				
 				int		op_type = ((Number)request.get( "op_type" )).intValue();
 				long	seq		= ((Number)request.get( "op_seq" )).longValue();
@@ -3097,6 +3634,32 @@ TorProxyDHT
 		{
 			log( "Proxy server setup complete: iid=" + instance_id );
 		
+			List<byte[]> saved_keys = null;
+			
+			synchronized( saved_remote_key_state ){
+				
+				Object[] sks = saved_remote_key_state.get( source_host );
+				
+				if ( sks != null ){
+					
+					if ( SystemTime.getMonotonousTime() -  ((Long)sks[0]).longValue() < 120*60*60 ){
+						
+						saved_keys = (List<byte[]>)sks[1];
+					}
+				}
+			}	
+			
+			if ( saved_keys != null ){
+				
+				synchronized( remote_key_state ){
+					
+					for ( byte[] key: saved_keys){
+						
+						remote_key_state.put( key, "" );
+					}
+				}
+			}
+			
 			setState( STATE_ACTIVE );
 
 			Map reply = new HashMap<>();
@@ -3119,7 +3682,7 @@ TorProxyDHT
 						
 			List<Map> l_contacts = new ArrayList<>();
 			
-			reply.put( "contacts", l_contacts );
+			reply.put( "contacts", getBackupContacts());
 			
 			send( MT_PROXY_ALLOC_FAIL_REPLY, reply );
 
@@ -3162,24 +3725,7 @@ TorProxyDHT
 			
 			addRemoteRequest( request );
 		}
-		
-		private ByteArrayHashMap<String>	remote_key_state = new ByteArrayHashMap<>();
-
-			// get requests at index 0, others index 1
-						
-		private LinkedList<ProxyRemoteRequest>[]	queued_requests = new LinkedList[2];
-		
-		{
-			queued_requests[0] = new LinkedList<>();
-			queued_requests[1] = new LinkedList<>();
-		}
-		
-		private int[]	active_request_count	= { 0, 0 };
-
-		private final int[] MAX_ACTIVE_REQUESTS = { 16, 16 };
-		
-		private final int MAX_QUEUED_REQUESTS	= 128;
-		
+				
 		private void
 		addRemoteRequest(
 			ProxyRemoteRequest		request )
@@ -3192,13 +3738,17 @@ TorProxyDHT
 			ProxyRemoteRequest	to_exec = null;
 			
 			synchronized( remote_key_state ){
-								
-				int type = request.getType() == ProxyRemoteRequest.RT_GET?0:1;
+						
+				int request_type = request.getType();
+				
+				int type = request_type == ProxyRemoteRequest.RT_GET?0:1;
 								
 				if ( 	queued_requests[0].size() + queued_requests[1].size() > MAX_QUEUED_REQUESTS || 
-						remote_key_state.size() > MAX_KEY_STATE ){
+						( request_type == ProxyRemoteRequest.RT_PUT && remote_key_state.size() > MAX_PROXY_KEY_STATE )){
 					
-						// silently ignore
+						// TODO: Could inform caller????
+					
+					request.requestComplete( new ArrayList<byte[]>());
 					
 					return;
 				}
@@ -3323,10 +3873,24 @@ TorProxyDHT
 		{
 			setState( STATE_FAILED );
 			
+			List<byte[]> state_keys;
+			
 			synchronized( remote_key_state ){
+				
+				state_keys = new ArrayList<byte[]>( remote_key_state.keys());
 				
 				queued_requests[0].clear();
 				queued_requests[1].clear();
+			}
+			
+			if ( !state_keys.isEmpty()){
+				
+				synchronized( saved_remote_key_state ){
+						
+					saved_remote_key_state.put( 
+							source_host, 
+							new Object[]{ SystemTime.getMonotonousTime(), state_keys });
+				}
 			}
 		}
 		
