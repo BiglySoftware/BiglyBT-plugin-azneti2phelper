@@ -24,7 +24,6 @@
 package org.parg.azureus.plugins.networks.i2p;
 
 import java.io.BufferedInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 
 
@@ -41,7 +40,6 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
-import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
@@ -844,9 +842,9 @@ I2PHelperPlugin
 			
 			i2p_address_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
 			
-			final ActionParameter new_id = config_model.addActionParameter2( "azi2phelper.new.identity", "azi2phelper.new.identity.button" );
+			final ActionParameter new_i2p_id = config_model.addActionParameter2( "azi2phelper.new.identity", "azi2phelper.new.identity.button" );
 			
-			new_id.addListener(
+			new_i2p_id.addListener(
 				new ParameterListener() {
 					
 					@Override
@@ -1090,13 +1088,77 @@ I2PHelperPlugin
 			
 			tor_address_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
 
-			enable_tor_endpoints.addEnabledOnSelection( tor_address_param, prefer_tor_peers );
+			final ActionParameter new_tor_id = config_model.addActionParameter2( "azi2phelper.new.identity.tor", "azi2phelper.new.identity.button" );
+			
+			new_tor_id.addListener(
+				new ParameterListener() {
+					
+					@Override
+					public void 
+					parameterChanged(
+						Parameter param) 
+					{
+						COConfigurationManager.setParameter( "azi2phelper.new.identity.tor.required", true );
+						
+						COConfigurationManager.setParameter( "azi2phelper.change.id.tor.time", SystemTime.getCurrentTime());
+						
+						COConfigurationManager.save();
+						
+						ui_manager.showMessageBox(
+								"azi2phelper.restart.title",
+								"azi2phelper.restart.message",
+								UIManagerEvent.MT_OK );
+					}
+				});
+			
+			final IntParameter 	change_tor_id	= config_model.addIntParameter2( "azi2phelper.change.tor.id", "azi2phelper.change.tor.id", 7, -1, 1024 );
+			
+			if ( !COConfigurationManager.getBooleanParameter( "azi2phelper.new.identity.tor.required" )){
+			
+				int change_id_days = change_id.getValue();
+			
+				boolean change_it = false;
+				
+				if ( change_id_days < 0 ){
+					
+				}else if ( change_id_days == 0 ){
+					
+					change_it = true;
+					
+				}else{
+					
+					long last_change = COConfigurationManager.getLongParameter( "azi2phelper.change.id.tor.time", 0 );
+					
+					if ( last_change == 0 ){
+						
+						COConfigurationManager.setParameter( "azi2phelper.change.id.tor.time", now );
+						
+					}else{
+						
+						long	elapsed_days = ( now - last_change )/(24*60*60*1000);
+						
+						if ( elapsed_days >= change_id_days ){
+							
+							change_it = true;
+						}
+					}
+				}
+				
+				if ( change_it ){
+					
+					COConfigurationManager.setParameter( "azi2phelper.change.id.tor.time", now );
+
+					COConfigurationManager.setParameter( "azi2phelper.new.identity.tor.required", true );
+				}
+			}
+				
+			enable_tor_endpoints.addEnabledOnSelection( tor_address_param, new_tor_id, change_tor_id, prefer_tor_peers );
 			
 			ParameterGroup tor_group = 
 					config_model.createGroup( 
 						"azi2phelper.tor",
 						new Parameter[]{ 
-								enable_tor_endpoints, prefer_tor_peers, tor_address_param
+								enable_tor_endpoints, prefer_tor_peers, tor_address_param, new_tor_id, change_tor_id
 						});
 
 				// throttle etc
@@ -1195,7 +1257,7 @@ I2PHelperPlugin
 			config_model.createGroup( 
 				"azi2phelper.internals.group",
 				new Parameter[]{ 
-						i2p_address_param, new_id, change_id, int_port_param, ext_port_param, use_upnp, port_info_param,
+						i2p_address_param, new_i2p_id, change_id, int_port_param, ext_port_param, use_upnp, port_info_param,
 						tunnel_group,
 						socks_group,
 						http_proxy_group,
@@ -1290,7 +1352,7 @@ I2PHelperPlugin
 							icon_enable.setEnabled( plugin_enabled );
 							
 							i2p_address_param.setEnabled( plugin_enabled );
-							new_id.setEnabled( plugin_enabled );
+							new_i2p_id.setEnabled( plugin_enabled );
 							change_id.setEnabled( plugin_enabled );
 							int_port_param.setEnabled( enabled_not_ext );
 							ext_port_param.setEnabled( enabled_not_ext);
@@ -1637,10 +1699,10 @@ I2PHelperPlugin
 								I2PHelperRouter my_router	= null;
 
 								try{	
-									boolean new_id = COConfigurationManager.getBooleanParameter( "azi2phelper.new.identity.required", false );
+									boolean new_i2p_id = COConfigurationManager.getBooleanParameter( "azi2phelper.new.identity.required", false );
 
 									my_router = router = 
-											new I2PHelperRouter( I2PHelperPlugin.this, plugin_dir, router_properties, is_bootstrap_node, is_vuze_dht, new_id, dht_count, I2PHelperPlugin.this );
+											new I2PHelperRouter( I2PHelperPlugin.this, plugin_dir, router_properties, is_bootstrap_node, is_vuze_dht, new_i2p_id, dht_count, I2PHelperPlugin.this );
 									
 									if ( ext_i2p_param.getValue()){
 											
@@ -1653,7 +1715,7 @@ I2PHelperPlugin
 										
 									my_router.initialiseDHTs();
 									
-									if ( new_id ){
+									if ( new_i2p_id ){
 									
 										COConfigurationManager.setParameter( "azi2phelper.new.identity.required", false );
 									
@@ -1902,6 +1964,8 @@ I2PHelperPlugin
 					return;
 				}
 				
+				boolean new_tor_id = COConfigurationManager.getBooleanParameter( "azi2phelper.new.identity.tor.required", false );
+
 				String host_str = "";
 								
 				for ( int i=0; i<dht_count; i++ ){
@@ -1982,7 +2046,12 @@ I2PHelperPlugin
 							options.put( "remote-port" /*AEProxyFactory.SP_REMOTE_PORT*/ , remote_port );
 							
 							options.put( AEProxyFactory.SP_BIND, "127.0.0.1" );
-												
+								
+							if ( new_tor_id ){
+								
+								options.put( "new-identity" /*AEProxyFactory.SP_NEW_IDENTITY*/, true );
+							}
+							
 							Map<String,Object> reply =
 									AEProxyFactory.getPluginServerProxy(
 										plugin_interface.getPluginName() + ": Tor " + i,
@@ -2023,6 +2092,13 @@ I2PHelperPlugin
 						Debug.out( e );
 					}
 				}
+				
+				if ( new_tor_id ){
+					
+					COConfigurationManager.setParameter( "azi2phelper.new.identity.tor.required", false );
+				
+					COConfigurationManager.save();
+				}			
 				
 				if ( !host_str.isEmpty()){
 					
@@ -3971,9 +4047,14 @@ I2PHelperPlugin
 					plugin_maybe_null.tor_proxy_dht.proxyGet( key );
 				
 				}else if ( cmd.equals( "tpd_tget" )){
-						
+					
 					byte[] torrent_hash = new byte[]{ 0,1,2,3,4,5 };
 
+					if ( bits.length > 1 ){
+						
+						torrent_hash = decodeHash( bits[1] );
+					}
+					
 					plugin_maybe_null.tor_proxy_dht.proxyTrackerGet(
 						torrent_hash, false, 80,
 						new TorProxyDHT.TorProxyDHTListener(){
@@ -3996,7 +4077,19 @@ I2PHelperPlugin
 								System.out.println( "tpd_tget complete" );
 							}
 						});
+					
+				}else if ( cmd.equals( "tpd_tput" )){
+					
+					byte[] torrent_hash = new byte[]{ 0,1,2,3,4,5 };
 
+					if ( bits.length > 1 ){
+						
+						torrent_hash = decodeHash( bits[1] );
+					}
+
+					plugin_maybe_null.tor_proxy_dht.proxyTrackerAnnounce(
+						torrent_hash, RandomUtils.nextInt(2)==1, null );
+					
 				}else{
 			
 					adapter.log( "Usage: print|info..." );
@@ -4490,7 +4583,9 @@ I2PHelperPlugin
 									
 									synchronized( local_port_map ){
 										
-										if ( local_port_map.get( proxy_port ) == dht_index ){
+										Integer di = local_port_map.get( proxy_port );
+										
+										if ( di != null &&  di == dht_index ){
 										
 											local_port_map.remove( proxy_port );
 										}
@@ -4512,8 +4607,10 @@ I2PHelperPlugin
 						if ( dht_index != null ){
 							
 							synchronized( local_port_map ){
+															
+								Integer di = local_port_map.get( proxy_port );
 								
-								if ( local_port_map.get( proxy_port ) == dht_index ){
+								if ( di != null &&  di == dht_index ){
 								
 									local_port_map.remove( proxy_port );
 								}
@@ -4648,8 +4745,10 @@ I2PHelperPlugin
 							
 							synchronized( local_port_map ){
 								
-								if ( local_port_map.get( proxy_port ) == dht_index ){
+								Integer di = local_port_map.get( proxy_port );
 								
+								if ( di != null &&  di == dht_index ){	
+									
 									local_port_map.remove( proxy_port );
 								}
 							}
@@ -4667,9 +4766,11 @@ I2PHelperPlugin
 					mapping.unregister();
 					
 					synchronized( local_port_map ){
+												
+						Integer di = local_port_map.get( proxy_port );
 						
-						if ( local_port_map.get( proxy_port ) == dht_index ){
-						
+						if ( di != null &&  di == dht_index ){
+							
 							local_port_map.remove( proxy_port );
 						}
 					}
@@ -5037,7 +5138,7 @@ I2PHelperPlugin
 		byte[]							key,
 		String							description,
 		byte[]							value,
-		byte							flags,
+		short							flags,
 		DHTPluginOperationListener		listener )
 	{
 		if ( dht.getDHTIndex() != I2PHelperRouter.DHT_NON_MIX ){

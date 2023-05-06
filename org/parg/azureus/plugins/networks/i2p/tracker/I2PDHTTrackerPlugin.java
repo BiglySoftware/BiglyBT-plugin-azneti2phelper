@@ -334,19 +334,22 @@ I2PDHTTrackerPlugin
 						
 			if ( torrent != null && networks != null ){
 				
-				boolean	i2p_net = false;
+				boolean	has_i2p = false;
+				boolean	has_tor = false;
 				
-				for (int i=0;i<networks.length;i++){
-					
-					if ( networks[i].equalsIgnoreCase( "I2P" )){
+				for ( String net: networks ){
+										
+					if ( net == AENetworkClassifier.AT_I2P ){
 							
-						i2p_net	= true;
+						has_i2p	= true;
 						
-						break;
+					}else if ( net == AENetworkClassifier.AT_TOR ){
+						
+						has_tor = true;
 					}
 				}
 				
-				if ( i2p_net && !TorrentUtils.isReallyPrivate( PluginCoreUtils.unwrap( torrent ))){
+				if (( has_i2p || has_tor) && !TorrentUtils.isReallyPrivate( PluginCoreUtils.unwrap( torrent ))){
 	
 					boolean	our_download =  torrent.wasCreatedByUs();
 	
@@ -482,8 +485,9 @@ I2PDHTTrackerPlugin
 			
 		int	register_type	= REG_TYPE_NONE;
 		
-		String	register_reason;
-		
+		String register_reason;
+		String reason_prefix = "";
+
 		Random	random = new Random();
 			/*
 			 * Queued downloads are removed from the set to consider as we now have the "presence store"
@@ -491,7 +495,7 @@ I2PDHTTrackerPlugin
 			 * if required. This has been done to avoid the large number of registrations that users with
 			 * large numbers of queued torrents were getting.
 			 */
-		
+				
 		if ( 	state == Download.ST_DOWNLOADING 	||
 				state == Download.ST_SEEDING 		||
 				// state == Download.ST_QUEUED 		||	
@@ -503,19 +507,27 @@ I2PDHTTrackerPlugin
 			
 			if ( torrent != null && networks != null ){
 				
-				boolean	i2p_net = false;
+				boolean	has_i2p = false;
+				boolean	has_tor = false;
 				
-				for (int i=0;i<networks.length;i++){
+				for ( String net: networks ){
 					
-					if ( networks[i].equalsIgnoreCase( "I2P" )){
+					if ( net == AENetworkClassifier.AT_I2P ){
 							
-						i2p_net	= true;
+						has_i2p	= true;
 						
-						break;
+					}else if ( net == AENetworkClassifier.AT_TOR ){
+						
+						has_tor = true;
 					}
 				}
 				
-				if ( i2p_net && !TorrentUtils.isReallyPrivate( PluginCoreUtils.unwrap( torrent ))){
+				if (( has_i2p || has_tor ) && !TorrentUtils.isReallyPrivate( PluginCoreUtils.unwrap( torrent ))){
+					
+					if ( has_tor && !has_i2p ){
+						
+						reason_prefix = "[Tor only] ";
+					}
 					
 					if ( torrent.isDecentralised()){
 						
@@ -563,7 +575,7 @@ I2PDHTTrackerPlugin
 									register_type = REG_TYPE_DERIVED;
 								}
 								
-								if( torrent.isDecentralisedBackupRequested() || TEST_ALWAYS_TRACK ){
+								if ( torrent.isDecentralisedBackupRequested() || TEST_ALWAYS_TRACK ){
 									
 									register_type	= REG_TYPE_FULL;
 									
@@ -714,7 +726,7 @@ I2PDHTTrackerPlugin
 				
 					if ( run_data == null ){
 						
-						log( download,	"Monitoring '" + download.getName() + "': " + register_reason);
+						log( download,	"Monitoring '" + download.getName() + "': " + reason_prefix + register_reason);
 						
 						int[] cache = run_data_cache.remove( download );
 						
@@ -749,7 +761,7 @@ I2PDHTTrackerPlugin
 						
 						if ( !skip_log ){
 							
-							log( download, "Not monitoring: "	+ register_reason);
+							log( download, "Not monitoring: "	+ reason_prefix + register_reason);
 						}
 	
 						running_downloads.remove( download );
@@ -767,7 +779,7 @@ I2PDHTTrackerPlugin
 						
 						if ( first_time && !skip_log ){
 							
-							log( download, "Not monitoring: "	+ register_reason);
+							log( download, "Not monitoring: "+ reason_prefix + register_reason);
 						}
 					}
 				}
@@ -937,6 +949,25 @@ I2PDHTTrackerPlugin
 	  			continue;
 	  		}
 	  		
+			String[]	networks = dl.getListAttribute( ta_networks );
+
+			boolean	has_i2p = false;
+			boolean	has_tor = false;
+			
+			for ( String net: networks ){
+										
+				if ( net == AENetworkClassifier.AT_I2P ){
+						
+					has_i2p	= true;
+					
+				}else if ( net == AENetworkClassifier.AT_TOR ){
+					
+					has_tor = true;
+				}
+			}
+	  		
+			String prefix = (has_tor && !has_i2p )?"[Tor only] ":"";
+			
 			byte	flags = (byte)( isComplete( dl )?DHT.FLAG_SEEDING:DHT.FLAG_DOWNLOADING );
 			
 			RegistrationDetails	registration = (RegistrationDetails)registered_downloads.get( dl );
@@ -945,7 +976,7 @@ I2PDHTTrackerPlugin
 			
 			if ( registration == null ){
 				
-				log( dl, "Registering download as " + (flags == DHT.FLAG_SEEDING?"Seeding":"Downloading"));
+				log( dl, prefix+"Registering download as " + (flags == DHT.FLAG_SEEDING?"Seeding":"Downloading"));
 
 				registration = new RegistrationDetails( dl, reg_type, put_details, flags );
 				
@@ -966,7 +997,7 @@ I2PDHTTrackerPlugin
 						registration.getFlags() != flags ||
 						!registration.getPutDetails().sameAs( put_details )){
 				
-					log( dl,(registration==null?"Registering":"Re-registering") + " download as " + (flags == DHT.FLAG_SEEDING?"Seeding":"Downloading"));
+					log( dl,prefix+(registration==null?"Registering":"Re-registering") + " download as " + (flags == DHT.FLAG_SEEDING?"Seeding":"Downloading"));
 					
 					registration.update( put_details, flags );
 					
@@ -1014,7 +1045,26 @@ I2PDHTTrackerPlugin
 			
 			if ( unregister ){
 				
-				log( dl, "Unregistering download" );
+				String[]	networks = dl.getListAttribute( ta_networks );
+
+				boolean	has_i2p = false;
+				boolean	has_tor = false;
+				
+				for ( String net: networks ){
+											
+					if ( net == AENetworkClassifier.AT_I2P ){
+							
+						has_i2p	= true;
+						
+					}else if ( net == AENetworkClassifier.AT_TOR ){
+						
+						has_tor = true;
+					}
+				}
+		  		
+				String prefix = (has_tor && !has_i2p )?"[Tor only] ":"";
+				
+				log( dl, prefix+"Unregistering download" );
 								
 				rd_it.remove();
 				
@@ -1261,107 +1311,139 @@ I2PDHTTrackerPlugin
 						}
 					}
 					
-					byte[] hash = target.getHash();
-					
-					dht.put( 
-						hash,
-						"Tracker reg of '" + download.getName() + "'" + target.getDesc() + " -> " + encoded,
-						flags,
-						new I2PHelperDHTAdapter()
-						{
-							@Override
-							public void
-							complete(
-								boolean		timeout )
-							{
-								if ( target.getType() == REG_TYPE_FULL ){
-									
-									log( 	download,
-											"Registration of '" + target.getDesc(rdht) + "' completed (elapsed="	+ TimeFormatter.formatColonMillis((SystemTime.getCurrentTime() - start)) + ")");
-								}
-								
-									// decreaseActive( dl );
-							}
-						});
-										
-					String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
-					
 					String[]	networks = download.getListAttribute( ta_networks );
-					
-					boolean has_tor = false;
+
+					boolean	has_i2p = false;
+					boolean	has_tor = false;
 					
 					for ( String net: networks ){
-						
-						if ( net == AENetworkClassifier.AT_TOR ){
+												
+						if ( net == AENetworkClassifier.AT_I2P ){
+								
+							has_i2p	= true;
+							
+						}else if ( net == AENetworkClassifier.AT_TOR ){
 							
 							has_tor = true;
 						}
 					}
 					
-					if ( tor_host != null && has_tor ){
+					byte[] hash = target.getHash();
 					
-						int pos = tor_host.lastIndexOf( "." );
-						
-						if ( pos != -1 ){
-							
-							tor_host = tor_host.substring( 0, pos );
-						}
-						
-						Map map = new HashMap();
-						
-						byte[] thb = tor_host.getBytes( Constants.UTF_8 );
-						
-						for ( int j=0;j<thb.length;j++){
-							
-							thb[j] ^= hash[j%hash.length];
-						}
-						
-						map.put( "th", thb );
-												
-						int tor_flags = 0;
-						
-						if ( NetworkManager.REQUIRE_CRYPTO_HANDSHAKE ){
-							
-							tor_flags |= 0x01;
-						}
-						
-						boolean is_seed = isComplete( download );
-
-						if ( is_seed ){
-							
-							tor_flags |= 0x02;
-						}
-						
-						if ( tor_flags != 0 ){
-							
-							map.put( "f", tor_flags );
-						}
-						
-						byte[] az_encoded = BEncoder.encode( map );
-						
-						dht.getHelperAZDHT().put( 
-							getAZHash( download, hash ),
-							"Tracker AZ reg of '" + download.getName() + "'" + target.getDesc() + " -> " + encoded,
-							az_encoded,
-							flags,
-							false,
-							new DHTPluginOperationAdapter(){
-																						
-								@Override
-								public void complete(byte[] key, boolean timeout_occurred){
-									if ( target.getType() == REG_TYPE_FULL ){
-										
-										log( 	download,
-												"AZ Registration of '" + target.getDesc(rdht) + "' completed (elapsed="	+ TimeFormatter.formatColonMillis((SystemTime.getCurrentTime() - start)) + ")");
-									}
-								}
-							});
+					if ( has_tor && !has_i2p ){
 						
 						if ( rdht.getDHTIndex() == I2PHelperRouter.DHT_NON_MIX && tor_proxy_dht != null ){
 							
-							tor_proxy_dht.proxyTrackerAnnounce( hash, is_seed );
+							boolean is_seed = isComplete( download );
+
+							tor_proxy_dht.proxyTrackerAnnounce( 
+								hash, is_seed,
+								new TorProxyDHT.TorProxyDHTAdapter(){
+																		
+									@Override
+									public void 
+									proxyComplete(
+										byte[] key, boolean timeout)
+									{
+										if ( target.getType() == REG_TYPE_FULL ){
+											
+											log( 	download,
+													"[Tor only] Registration of '" + target.getDesc(rdht) + "' completed (elapsed="	+ TimeFormatter.formatColonMillis((SystemTime.getCurrentTime() - start)) + ")");
+										}
+									}
+								});
 						}
-					}					
+
+					}else{
+						
+						dht.put( 
+							hash,
+							"Tracker reg of '" + download.getName() + "'" + target.getDesc() + " -> " + encoded,
+							flags,
+							new I2PHelperDHTAdapter()
+							{
+								@Override
+								public void
+								complete(
+									boolean		timeout )
+								{
+									if ( target.getType() == REG_TYPE_FULL ){
+										
+										log( 	download,
+												"Registration of '" + target.getDesc(rdht) + "' completed (elapsed="	+ TimeFormatter.formatColonMillis((SystemTime.getCurrentTime() - start)) + ")");
+									}
+									
+										// decreaseActive( dl );
+								}
+							});
+											
+						String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
+											
+						if ( tor_host != null && has_tor ){
+						
+							int pos = tor_host.lastIndexOf( "." );
+							
+							if ( pos != -1 ){
+								
+								tor_host = tor_host.substring( 0, pos );
+							}
+							
+							Map map = new HashMap();
+							
+							byte[] thb = tor_host.getBytes( Constants.UTF_8 );
+							
+							for ( int j=0;j<thb.length;j++){
+								
+								thb[j] ^= hash[j%hash.length];
+							}
+							
+							map.put( "th", thb );
+													
+							int tor_flags = 0;
+							
+							if ( NetworkManager.REQUIRE_CRYPTO_HANDSHAKE ){
+								
+								tor_flags |= 0x01;
+							}
+							
+							boolean is_seed = isComplete( download );
+	
+							if ( is_seed ){
+								
+								tor_flags |= 0x02;
+							}
+							
+							if ( tor_flags != 0 ){
+								
+								map.put( "f", tor_flags );
+							}
+							
+							byte[] az_encoded = BEncoder.encode( map );
+							
+							dht.getHelperAZDHT().put( 
+								getAZHash( download, hash ),
+								"Tracker AZ reg of '" + download.getName() + "'" + target.getDesc() + " -> " + encoded,
+								az_encoded,
+								flags,
+								false,
+								new DHTPluginOperationAdapter(){
+																							
+									@Override
+									public void complete(byte[] key, boolean timeout_occurred){
+										if ( target.getType() == REG_TYPE_FULL ){
+											
+											log( 	download,
+													"AZ Registration of '" + target.getDesc(rdht) + "' completed (elapsed="	+ TimeFormatter.formatColonMillis((SystemTime.getCurrentTime() - start)) + ")");
+										}
+									}
+								});
+							
+							if ( rdht.getDHTIndex() == I2PHelperRouter.DHT_NON_MIX && tor_proxy_dht != null ){
+								
+								tor_proxy_dht.proxyTrackerAnnounce( hash, is_seed, null );
+							}
+						}
+					}
 				}catch( Throwable e ){					
 				}
 			}
@@ -1379,6 +1461,23 @@ I2PDHTTrackerPlugin
 		final long[]	max_retry = { 0 };
 		
 		int	num_done = 0;
+		
+		String[]	networks = download.getListAttribute( ta_networks );
+		
+		boolean	has_i2p = false;
+		boolean	has_tor = false;
+		
+		for ( String net: networks ){
+									
+			if ( net == AENetworkClassifier.AT_I2P ){
+					
+				has_i2p	= true;
+				
+			}else if ( net == AENetworkClassifier.AT_TOR ){
+				
+				has_tor = true;
+			}
+		}
 		
 		for (int i=0;i<targets.length;i++){
 			
@@ -1404,67 +1503,69 @@ I2PDHTTrackerPlugin
 				
 				boolean is_complete = isComplete( download );
 				
-				
-				String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
-				
-				String[]	networks = download.getListAttribute( ta_networks );
-				
-				boolean has_tor = false;
-				
-				for ( String net: networks ){
-					
-					if ( net == AENetworkClassifier.AT_TOR ){
-						
-						has_tor = true;
-					}
-				}
-
-				boolean	secondary_get = tor_host != null && has_tor;
-				
 				boolean proxy_get = rdht.getDHTIndex() == I2PHelperRouter.DHT_NON_MIX && tor_proxy_dht != null;
-				
-				int complete_count = 1;
-				
-				if ( secondary_get ){
-					
-					complete_count++;
-				}				
-				
-				if ( proxy_get ){
-					
-					complete_count++;
-				}
-				
-				GetAdapter get_adapter = new GetAdapter( rdht, download, details, target, derived_only, max_retry, complete_count );
-				
-				dht.get(
-						hash, 
-						"Tracker announce for '" + download.getName() + "'" + target.getDesc(),
-						(byte)( is_complete?DHT.FLAG_SEEDING:DHT.FLAG_DOWNLOADING),
-						NUM_WANT, 
-						target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
-						get_adapter );
-				
-				
-				
-				if ( secondary_get ){
-				
-					dht.getHelperAZDHT().get(
-						getAZHash(download, hash),
-						"Tracker AZ announce for '" + download.getName() + "'" + target.getDesc(),
-						is_complete?DHTPlugin.FLAG_SEEDING:DHTPlugin.FLAG_DOWNLOADING,
-						NUM_WANT,
-						target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
-						false, false,
-						get_adapter );
+
+				if ( has_tor && !has_i2p ){
 					
 					if ( proxy_get ){
 						
+						GetAdapter get_adapter = new GetAdapter( rdht, download, details, target, derived_only, max_retry, 1, true );
+
 						tor_proxy_dht.proxyTrackerGet( 
+								hash, 
+								is_complete, 
+								NUM_WANT,
+								get_adapter );
+					}
+					
+				}else{
+					String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
+	
+					boolean	secondary_get = tor_host != null && has_tor;
+										
+					int complete_count = 1;
+					
+					if ( secondary_get ){
+						
+						complete_count++;
+					}				
+					
+					if ( proxy_get ){
+						
+						complete_count++;
+					}
+					
+					GetAdapter get_adapter = new GetAdapter( rdht, download, details, target, derived_only, max_retry, complete_count, false );
+					
+					dht.get(
 							hash, 
-							is_complete, 
-							NUM_WANT,
+							"Tracker announce for '" + download.getName() + "'" + target.getDesc(),
+							(byte)( is_complete?DHT.FLAG_SEEDING:DHT.FLAG_DOWNLOADING),
+							NUM_WANT, 
+							target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
 							get_adapter );
+					
+					
+					
+					if ( secondary_get ){
+					
+						dht.getHelperAZDHT().get(
+							getAZHash(download, hash),
+							"Tracker AZ announce for '" + download.getName() + "'" + target.getDesc(),
+							is_complete?DHTPlugin.FLAG_SEEDING:DHTPlugin.FLAG_DOWNLOADING,
+							NUM_WANT,
+							target_type==REG_TYPE_FULL?ANNOUNCE_TIMEOUT:ANNOUNCE_DERIVED_TIMEOUT,
+							false, false,
+							get_adapter );
+						
+						if ( proxy_get ){
+							
+							tor_proxy_dht.proxyTrackerGet( 
+								hash, 
+								is_complete, 
+								NUM_WANT,
+								get_adapter );
+						}
 					}
 				}
 				
@@ -1748,7 +1849,7 @@ I2PDHTTrackerPlugin
 	
 	protected void
 	trackerRemove(
-		final Download			download,
+		Download				download,
 		RegistrationDetails		details )
 	{
 		if ( download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
@@ -1759,6 +1860,23 @@ I2PDHTTrackerPlugin
 		final 	long	start = SystemTime.getCurrentTime();
 		
 		trackerTarget[] targets = details.getTargets( true );
+		
+		String[]	networks = download.getListAttribute( ta_networks );
+
+		boolean	has_i2p = false;
+		boolean	has_tor = false;
+		
+		for ( String net: networks ){
+									
+			if ( net == AENetworkClassifier.AT_I2P ){
+					
+				has_i2p	= true;
+				
+			}else if ( net == AENetworkClassifier.AT_TOR ){
+				
+				has_tor = true;
+			}
+		}
 		
 		try{
 			final I2PHelperRouterDHT rdht = router.selectDHT( download );
@@ -1781,22 +1899,150 @@ I2PDHTTrackerPlugin
 			
 				byte[] hash = target.getHash();
 
-				if ( dht.hasLocalKey( hash )){
-					
-					String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
-					
-					String[]	networks = download.getListAttribute( ta_networks );
-					
-					boolean has_tor = false;
-					
-					for ( String net: networks ){
+				if ( dht.hasLocalKey( hash ) || has_tor ){
+										
+					if ( has_tor && !has_i2p ){
 						
-						if ( net == AENetworkClassifier.AT_TOR ){
+						if ( rdht.getDHTIndex() == I2PHelperRouter.DHT_NON_MIX && tor_proxy_dht != null ){
 							
-							has_tor = true;
+							increaseActive( download );
+							
+							tor_proxy_dht.proxyTrackerRemove( 
+								hash,
+								new TorProxyDHT.TorProxyDHTAdapter(){
+																		
+									@Override
+									public void 
+									proxyComplete(byte[] key, boolean timeout)
+									{
+										if ( target.getType() == REG_TYPE_FULL ){
+											
+											log( 	download,
+													"[Tor only] Unregistration of '" + target.getDesc(rdht) + "' completed (elapsed="
+														+ TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start) + ")");
+										}
+										
+										decreaseActive( download );
+									}
+								});
+						}
+						
+					}else{
+						
+						String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
+						
+						boolean	secondary_remove = tor_host != null && has_tor;
+
+						increaseActive( download );
+						
+						dht.remove( 
+								hash,
+								"Tracker dereg of '" + download.getName() + "'" + target.getDesc(),
+								new I2PHelperDHTAdapter()
+								{
+									@Override
+									public void
+									complete(
+										boolean	timeout_occurred )
+									{
+										if ( target.getType() == REG_TYPE_FULL ){
+			
+											log( 	download,
+													"Unregistration of '" + target.getDesc(rdht) + "' completed (elapsed="
+														+ TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start) + ")");
+										}
+										
+										decreaseActive( download );
+									}
+								});
+						
+						if ( secondary_remove ){
+							
+							dht.getHelperAZDHT().remove(
+									getAZHash(download, hash),
+									"Tracker AZ dereg of '" + download.getName() + "'" + target.getDesc(),
+									new DHTPluginOperationAdapter());
+							
+							if ( rdht.getDHTIndex() == I2PHelperRouter.DHT_NON_MIX && tor_proxy_dht != null ){
+								
+								tor_proxy_dht.proxyTrackerRemove( hash, null );
+							}
 						}
 					}
+				}
+			}
+		}catch( Throwable e ){
+			
+		}
+	}
 
+	protected void
+	trackerRemove(
+		final Download			download,
+		final trackerTarget 	target )
+	{
+		if ( download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
+			
+			return;
+		}
+		
+		String[]	networks = download.getListAttribute( ta_networks );
+
+		boolean	has_i2p = false;
+		boolean	has_tor = false;
+		
+		for ( String net: networks ){
+									
+			if ( net == AENetworkClassifier.AT_I2P ){
+					
+				has_i2p	= true;
+				
+			}else if ( net == AENetworkClassifier.AT_TOR ){
+				
+				has_tor = true;
+			}
+		}
+		
+		try{
+			final 	long	start = SystemTime.getCurrentTime();
+			
+			final I2PHelperRouterDHT rdht = router.selectDHT( download );
+
+			I2PHelperDHT dht = rdht.getDHT(true);
+	
+			byte[] hash = target.getHash();
+			
+			if ( dht.hasLocalKey( hash ) || has_tor ){
+				
+				if ( has_tor && !has_i2p ){
+					
+					if ( rdht.getDHTIndex() == I2PHelperRouter.DHT_NON_MIX && tor_proxy_dht != null ){
+						
+						increaseActive( download );
+						
+						tor_proxy_dht.proxyTrackerRemove( 
+							hash,
+							new TorProxyDHT.TorProxyDHTAdapter(){
+								
+								@Override
+								public void 
+								proxyComplete(
+									byte[] key, boolean timeout)
+								{
+									if ( target.getType() == REG_TYPE_FULL ){
+										
+										log( 	download,
+												"[Tor only] Unregistration of '" + target.getDesc(rdht) + "' completed (elapsed="
+													+ TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start) + ")");
+									}
+									
+									decreaseActive( download );
+								}
+							});
+					}
+				}else{
+					String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
+					
 					boolean	secondary_remove = tor_host != null && has_tor;
 					
 					increaseActive( download );
@@ -1831,57 +2077,10 @@ I2PDHTTrackerPlugin
 						
 						if ( rdht.getDHTIndex() == I2PHelperRouter.DHT_NON_MIX && tor_proxy_dht != null ){
 							
-							tor_proxy_dht.proxyTrackerRemove( hash );
+							tor_proxy_dht.proxyTrackerRemove( hash, null );
 						}
 					}
 				}
-			}
-		}catch( Throwable e ){
-			
-		}
-	}
-
-	protected void
-	trackerRemove(
-		final Download			download,
-		final trackerTarget 	target )
-	{
-		if ( download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
-			
-			return;
-		}
-		
-		try{
-			final 	long	start = SystemTime.getCurrentTime();
-			
-			final I2PHelperRouterDHT rdht = router.selectDHT( download );
-
-			I2PHelperDHT dht = rdht.getDHT(true);
-	
-			if ( dht.hasLocalKey( target.getHash())){
-				
-				increaseActive( download );
-				
-				dht.remove( 
-						target.getHash(),
-						"Tracker dereg of '" + download.getName() + "'" + target.getDesc(),
-						new I2PHelperDHTAdapter()
-						{
-							@Override
-							public void
-							complete(
-								boolean	timeout_occurred )
-							{
-								if ( target.getType() == REG_TYPE_FULL ){
-	
-									log( 	download,
-											"Unregistration of '" + target.getDesc(rdht) + "' completed (elapsed="
-											+ TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start) + ")");
-								}
-								
-								decreaseActive( download );
-							}
-						});
 			}
 		}catch( Throwable e ){
 		}
@@ -2775,6 +2974,7 @@ I2PDHTTrackerPlugin
 		final trackerTarget			target;
 		final boolean				derived_only;
 		final long[]				max_retry;
+		final boolean				tor_only;
 		
 		final Torrent				torrent;
 		final URL					url_to_report;
@@ -2799,7 +2999,8 @@ I2PDHTTrackerPlugin
 			trackerTarget		_target,
 			boolean				_derived_only,
 			long[]				_max_retry,
-			int					_complete_count )
+			int					_complete_count,
+			boolean				_tor_only )
 		{
 			rdht			= _rdht;
 			download		= _download;
@@ -2807,6 +3008,7 @@ I2PDHTTrackerPlugin
 			target			= _target;
 			derived_only	= _derived_only;
 			max_retry		= _max_retry;
+			tor_only		= _tor_only;
 			
 			torrent = download.getTorrent();
 			
@@ -2918,14 +3120,42 @@ I2PDHTTrackerPlugin
 					}
 					
 					if ( !i2p_tor_peers.isEmpty()){
-												
-						peers.addAll( i2p_tor_peers.values());
+								
+						for ( Object[] peer: i2p_tor_peers.values()){
+							
+							peers.add( peer );
+							
+							boolean	is_seed			= (Boolean)peer[2];
+							
+							if ( is_seed ){
+								
+								seed_count++;
+								
+							}else{
+								
+								leecher_count++;
+							}
+						}
 					}
 				}
 				
 				if ( !proxy_tor_peers.isEmpty()){
 					
-					peers.addAll( proxy_tor_peers.values());
+					for ( Object[] peer: proxy_tor_peers.values()){
+						
+						peers.add( peer );
+						
+						boolean	is_seed			= (Boolean)peer[2];
+						
+						if ( is_seed ){
+							
+							seed_count++;
+							
+						}else{
+							
+							leecher_count++;
+						}
+					}
 				}
 			}
 			
@@ -2934,7 +3164,7 @@ I2PDHTTrackerPlugin
 						seed_count + leecher_count > 1 )){
 				
 				log( 	download,
-						"Get of '" + target.getDesc(rdht) + "' completed (elapsed=" + TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start)
+						(tor_only?"[Tor only] ":"") + "Get of '" + target.getDesc(rdht) + "' completed (elapsed=" + TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start)
 								+ "), peers=" + peers.size() + " (" + init_peers + "/" + init_i2p_tor + "/" + init_proxy_tor + "), seeds="
 								+ seed_count + ", leechers=" + leecher_count);
 			}
@@ -3018,17 +3248,26 @@ I2PDHTTrackerPlugin
 										
 			putDetails put_details = details.getPutDetails();
 			
-			String	ext_address = put_details.getIPOverride();
+			String	i2p_ext_address = put_details.getIPOverride();
 			
-			if ( ext_address == null ){
+			if ( i2p_ext_address == null ){
 					
 				try{
-					ext_address = router.selectDHT( download ).getDHT(true).getLocalAddress();
+					i2p_ext_address = router.selectDHT( download ).getDHT(true).getLocalAddress();
 					
 				}catch( Throwable e ){	
 					
-					ext_address = "";
+					i2p_ext_address = "";
 				}
+			}
+			
+			TorEndpoint our_tep = router.getPlugin().getTorEndpoint( rdht.getDHTIndex());
+			
+			String tor_ext_address = our_tep.getHost();
+
+			if ( tor_ext_address == null ){
+				
+				tor_ext_address = "";
 			}
 			
 			for (int i=0;i<peers.size();i++){
@@ -3049,7 +3288,7 @@ I2PDHTTrackerPlugin
 				
 					// remove ourselves
 								
-				if ( ip.equals( ext_address )){
+				if ( ip.equals( i2p_ext_address ) || ip.equals( tor_ext_address )){
 														
 					continue;
 				}
@@ -3338,9 +3577,7 @@ I2PDHTTrackerPlugin
 			byte[] hash = target.getHash();
 			
 			TorEndpoint our_tep = router.getPlugin().getTorEndpoint( rdht.getDHTIndex());
-			
-			String our_tor_host = our_tep.getHost();
-			
+						
 			try{
 				Map map = BDecoder.decode( value );
 				
@@ -3367,24 +3604,21 @@ I2PDHTTrackerPlugin
 					}
 					
 					String th = new String( thb, Constants.UTF_8 ) + ".onion";
-				
-					if ( !th.equals( our_tor_host )){
-											
-						int port = our_tep.getPort();
+															
+					int port = our_tep.getPort();
+					
+					InetSocketAddress o_address = originator.getAddress();
+					
+					//System.out.println( o_address.getHostName() + ":" + o_address.getPort() + " -> " + th + ", seed=" + is_seed + ", crypto=" + crypto_required + ", port=" + port );
+					
+					synchronized( this ){
 						
-						InetSocketAddress o_address = originator.getAddress();
-						
-						//System.out.println( o_address.getHostName() + ":" + o_address.getPort() + " -> " + th + ", seed=" + is_seed + ", crypto=" + crypto_required + ", port=" + port );
-						
-						synchronized( this ){
+						if ( complete ){
 							
-							if ( complete ){
-								
-								return;
-							}
-							
-							i2p_tor_peers.put( o_address.getHostName(), new Object[]{ th, port, is_seed, crypto_required });
+							return;
 						}
+						
+						i2p_tor_peers.put( o_address.getHostName(), new Object[]{ th, port, is_seed, crypto_required });
 					}
 				}
 				
@@ -3419,24 +3653,21 @@ I2PDHTTrackerPlugin
 		{
 			// System.out.println( "Announce reply: " + originator + "/" + is_seed + "/" + crypto_required );
 			
-			TorEndpoint our_tep = router.getPlugin().getTorEndpoint( rdht.getDHTIndex());
+			//TorEndpoint our_tep = router.getPlugin().getTorEndpoint( rdht.getDHTIndex());
 			
-			String our_tor_host = our_tep.getHost();
+			//String our_tor_host = our_tep.getHost();
 			
 			try{
 				String host = AddressUtils.getHostAddress(originator);
-				
-				if ( !host.equals( our_tor_host )){
-																
-					synchronized( this ){
+																				
+				synchronized( this ){
+					
+					if ( complete ){
 						
-						if ( complete ){
-							
-							return;
-						}
-						
-						proxy_tor_peers.put( host, new Object[]{ host, originator.getPort(), is_seed, crypto_required });
+						return;
 					}
+					
+					proxy_tor_peers.put( host, new Object[]{ host, originator.getPort(), is_seed, crypto_required });
 				}
 			}catch( Throwable e ){									
 			}

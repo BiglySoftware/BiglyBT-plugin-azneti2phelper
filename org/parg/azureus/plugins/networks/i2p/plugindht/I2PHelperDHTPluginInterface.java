@@ -538,6 +538,18 @@ I2PHelperDHTPluginInterface
 		final byte[]						value,
 		final byte							flags,
 		final DHTPluginOperationListener	listener)
+	{
+		put( key, description, value, (short)( flags&0x00ff ), true, listener );
+	}
+	
+	public void
+	put(
+		final byte[]						key,
+		final String						description,
+		final byte[]						value,
+		final short							flags,
+		boolean								high_priority,
+		final DHTPluginOperationListener	listener)
 	{	
 		if ((flags & DHTPluginInterface.FLAG_BRIDGED )!= 0 ){
 			
@@ -580,7 +592,7 @@ I2PHelperDHTPluginInterface
 								
 							}else{
 								
-								dht.put( key, description, value, (short)(flags&0x00ff), true, listener );
+								dht.put( key, description, value, flags, high_priority, listener );
 							}
 						}
 					});
@@ -594,6 +606,16 @@ I2PHelperDHTPluginInterface
 		final byte[]						key,
 		final String						description,
 		final DHTPluginOperationListener	listener )
+	{
+		remove( key, description, (short)0, listener );
+	}
+	
+	public void
+	remove(
+		byte[]						key,
+		String						description,
+		short						flags,
+		DHTPluginOperationListener	listener )
 	{
 		if ( dht != null && dispatcher.getQueueSize() == 0 ){
 			

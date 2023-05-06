@@ -104,7 +104,10 @@ TorProxyDHT
 	private static final int MAX_PROXY_KEY_STATE			= 256;
 	private static final int MAX_GLOBAL_KEY_STATE			= MAX_PROXY_KEY_STATE * MAX_SERVER_PROXIES;
 
+		// methods introduced in 3301 - remove when safe to do so!
+	
 	private final Method method_DHTPluginInterface_put;
+	private final Method method_DHTPluginInterface_remove;
 	
 	private final I2PHelperPlugin		plugin;
 	private final PluginInterface		plugin_interface;
@@ -196,17 +199,24 @@ TorProxyDHT
 		
 		plugin_interface = plugin.getPluginInterface();
 		
-		Method method = null;
+		Method method1 = null;
+		Method method2 = null;
 		
 		try{		
-			method = DHTPluginInterface.class.getMethod( 
+			method1 = DHTPluginInterface.class.getMethod( 
 						"put", 
 						byte[].class, String.class, byte[].class, short.class, boolean.class, DHTPluginOperationListener.class );
+			
+			method2 = DHTPluginInterface.class.getMethod( 
+					"remove", 
+					byte[].class, String.class, short.class, DHTPluginOperationListener.class );
+
 			
 		}catch( Throwable e ){
 		}
 		
-		method_DHTPluginInterface_put = method;
+		method_DHTPluginInterface_put		= method1;
+		method_DHTPluginInterface_remove	= method2;
 		
 		byte[] temp = new byte[8];
 		
@@ -320,19 +330,13 @@ TorProxyDHT
 									if ( tick_count % 6 == 0 ){
 										
 										OutboundConnectionProxy ccp = current_client_proxy;
+																				
+										log( "Connections=" + connections.size());
 										
-										String ccp_str;
-										
-										if ( ccp == null ){
+										if ( ccp != null ){
 											
-											ccp_str = "";
-											
-										}else{
-											
-											ccp_str = ", " + ccp.getString();
+											log( "    " + ccp.getString());
 										}
-										
-										log( "con=" + connections.size() + ccp_str );
 										
 										for ( InboundConnection sp: server_proxies ){
 											
@@ -369,10 +373,21 @@ TorProxyDHT
 				
 			checkClientProxy( true );
 			
-			byte[] torrent_hash = new byte[]{ 0,1,2,3,4,5 };
+			try{
+				byte[]	random_key = new byte[16];
 				
-			proxyTrackerAnnounce( torrent_hash, RandomUtils.nextInt(2)==1 );
-			
+				RandomUtils.nextSecureBytes( random_key );
+				
+				byte[]	random_value = new byte[4+RandomUtils.nextInt(12)];
+				
+				RandomUtils.nextSecureBytes( random_value );
+				
+				proxyPut( random_key, random_value, new HashMap<String,Object>());
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
 		}catch( Throwable e ){
 			
 			Debug.out( e );
@@ -381,9 +396,12 @@ TorProxyDHT
 	
 	public void
 	proxyTrackerAnnounce(
-		byte[]		torrent_hash,
-		boolean		is_seed )
+		byte[]					torrent_hash,
+		boolean					is_seed,
+		TorProxyDHTListener		listener )
 	{
+		log( "proxyTrackerAnnounce: " + ByteFormatter.encodeString(torrent_hash) + "/" + is_seed );
+
 		try{
 			MessageDigest sha256 = MessageDigest.getInstance( "SHA-256" );
 						
@@ -393,7 +411,7 @@ TorProxyDHT
 			
 			byte[] key = sha256.digest();
 				
-			Map payload = new HashMap<>();
+			Map<String,Object> payload = new HashMap<>();
 			
 			payload.put( "s", is_seed?1:0 );
 			
@@ -402,15 +420,36 @@ TorProxyDHT
 				payload.put( "c", 1 );
 			}
 			
-			Map	options = new HashMap<>();
+			Map<String,Object>	options = new HashMap<>();
 			
 			options.put( "f", is_seed?DHTPluginInterface.FLAG_SEEDING:DHTPluginInterface.FLAG_DOWNLOADING );
 			
-			proxyLocalPut( key, payload, options );
+			proxyLocalPut( 
+				key, payload, options,
+				new ProxyRequestAdapter()
+				{
+					@Override
+					public void 
+					complete(
+						byte[] key, boolean timeout)
+					{
+						log( "   proxyTrackerAnnounce complete" );
+
+						if ( listener != null ){
+							
+							listener.proxyComplete( torrent_hash, timeout );
+						}
+					}
+				});
 			
 		}catch( Throwable e ){
 			
 			Debug.out( e );
+			
+			if ( listener != null ){
+				
+				listener.proxyComplete( torrent_hash, true );
+			}
 		}
 	}
 	
@@ -421,6 +460,8 @@ TorProxyDHT
 		int						num_want,
 		TorProxyDHTListener		listener )
 	{
+		log( "proxyTrackerGet: " + ByteFormatter.encodeString(torrent_hash) + "/" + is_seed + "/" + num_want );
+
 		try{
 			MessageDigest sha256 = MessageDigest.getInstance( "SHA-256" );
 			
@@ -432,7 +473,7 @@ TorProxyDHT
 	
 			long timeout = 2*60*1000;
 			
-			Map	options = new HashMap<>();
+			Map<String,Object>	options = new HashMap<>();
 			
 			options.put( "f", is_seed?DHTPluginInterface.FLAG_SEEDING:DHTPluginInterface.FLAG_DOWNLOADING );
 			options.put( "t", timeout );
@@ -442,15 +483,15 @@ TorProxyDHT
 				key, 
 				options, 
 				timeout,
-				new ProxyGetListener()
+				new ProxyRequestListener()
 				{	
 					@Override
 					public void 
 					valuesRead(
-						byte[]				key,
-						List<Map> 			values )
+						byte[]						key,
+						List<Map<String,Object>> 	values )
 					{
-						for ( Map v: values ){
+						for ( Map<String,Object> v: values ){
 							
 							try{
 								String	host = (String)v.get( "h" );
@@ -467,6 +508,8 @@ TorProxyDHT
 									require_crypto = c.intValue() == 1;
 								}
 								
+								log( "   proxyTrackerGet -> " + host + ":" + port + "/" + is_seed + "/" + require_crypto );
+
 								listener.proxyValueRead(
 									InetSocketAddress.createUnresolved(host, port),
 									is_seed,
@@ -485,6 +528,8 @@ TorProxyDHT
 						byte[]			 	key, 
 						boolean 			timeout )
 					{
+						log( "   proxyTrackerGet complete" );
+						
 						try{
 							listener.proxyComplete( torrent_hash, timeout );
 							
@@ -505,8 +550,11 @@ TorProxyDHT
 	
 	public void
 	proxyTrackerRemove(
-		byte[]		torrent_hash )
+		byte[]				torrent_hash,
+		TorProxyDHTListener	listener )
 	{
+		log( "proxyTrackerRemove: " + ByteFormatter.encodeString(torrent_hash));
+		
 		try{
 			MessageDigest sha256 = MessageDigest.getInstance( "SHA-256" );
 			
@@ -516,27 +564,60 @@ TorProxyDHT
 			
 			byte[] key = sha256.digest();
 			
-			proxyLocalRemove( key );
+			proxyLocalRemove( 
+				key,
+				new ProxyRequestAdapter()
+				{
+					@Override
+					public void 
+					complete(
+						byte[] key, boolean timeout)
+					{
+						log( "   proxyTrackerRemove complete" );
+						
+						if ( listener != null ){
+							
+							listener.proxyComplete( torrent_hash, timeout );
+						}
+					}
+				});
 			
 		}catch( Throwable e ){
 			
 			Debug.out( e );
+			
+			if ( listener != null ){
+			
+				listener.proxyComplete( torrent_hash, true );
+			}
 		}
 	}
 	
 	public void
 	proxyPut(
-		byte[]			key,
-		byte[]			value,
-		Map				options )
+		byte[]				key,
+		byte[]				value,
+		Map<String,Object>	options )
 	
 		throws Exception
 	{
-		Map map = new HashMap<>();
+		Map<String,Object> map = new HashMap<>();
 		
 		map.put( "v", value );
 		
-		proxyLocalPut( key, map, options );
+		proxyLocalPut(
+			key, map, options,
+			new ProxyRequestAdapter(){
+				
+				@Override
+				public void 
+				complete(
+					byte[] 	key, 
+					boolean timeout )
+				{
+					log( "proxyPut complete" );
+				}
+			});
 	}
 
 	public void
@@ -545,17 +626,17 @@ TorProxyDHT
 	{
 		proxyLocalGet(
 			key, null, 2*60*1000,
-			new ProxyGetListener(){
+			new ProxyRequestListener(){
 				
 				@Override
 				public void 
 				valuesRead(
-					byte[]		key, 
-					List<Map>	values)
+					byte[]						key, 
+					List<Map<String,Object>>	values)
 				{
 					log( "proxyGet valuesRead: values=" + values.size());
 					
-					for ( Map m: values ){
+					for ( Map<String,Object> m: values ){
 						
 						log( "    " + BDecoder.decodeStrings(m));
 					}
@@ -578,7 +659,19 @@ TorProxyDHT
 	
 		throws Exception
 	{		
-		proxyLocalRemove( key );
+		proxyLocalRemove(
+			key,
+			new ProxyRequestAdapter(){
+				
+				@Override
+				public void 
+				complete(
+					byte[] 	key, 
+					boolean timeout )
+				{
+					log( "proxyRemove complete" );
+				}
+			});
 	}
 	
 		// local operations
@@ -586,39 +679,41 @@ TorProxyDHT
 	
 	private void
 	proxyLocalPut(
-		byte[]		key,
-		Map			value,
-		Map			options )
+		byte[]					key,
+		Map<String,Object>		value,
+		Map<String,Object>		options,
+		ProxyRequestListener	listener )
 	
 		throws Exception
 	{
-			// "h", "p" and "z" are reserved
+			// "h", "p", "t" and "z" are reserved
 		
-		if ( value.containsKey("h") || value.containsKey("p")|| value.containsKey( "z" )){
+		if ( 	value.containsKey( "h" ) || 
+				value.containsKey( "p" ) ||
+				value.containsKey( "t" ) ||
+				value.containsKey( "z" )){
 			
 			throw( new Exception( "Invalid map, uses reserved keys" ));
 		}
 		
-		ProxyLocalRequestPut request = new ProxyLocalRequestPut( key, value );
+		ProxyLocalRequestPut request = new ProxyLocalRequestPut( key, value, listener );
 		
 		request.setOptions( options );
-		
+				
 		addRequest( request );
 	}
 	
 	private void
 	proxyLocalGet(
 		byte[]					key,
-		Map						options,
+		Map<String,Object>		options,
 		long					timeout,
-		ProxyGetListener		listener )
+		ProxyRequestListener	listener )
 	{
-		ProxyLocalRequestGet	request = new ProxyLocalRequestGet( key );
+		ProxyLocalRequestGet	request = new ProxyLocalRequestGet( key, listener );
 		
 		request.setOptions( options );
-		
-		request.setListener( listener );
-		
+				
 		request.setTimeout( timeout );
 		
 		addRequest( request );		
@@ -626,16 +721,17 @@ TorProxyDHT
 	
 	private void
 	proxyLocalRemove(
-		byte[]		key )
+		byte[]					key,
+		ProxyRequestListener	listener )
 	{
-		addRequest( new ProxyLocalRequestRemove( key ));		
+		addRequest( new ProxyLocalRequestRemove( key, listener ));		
 	}
 	
 	class
 	LocalKeyState
 	{
 		private ProxyLocalRequest	pending_request;
-		private boolean				has_active_request;
+		private ProxyLocalRequest	active_request;
 		
 		private long				last_ok_time;
 		private ProxyLocalRequest	last_ok_request;
@@ -654,8 +750,10 @@ TorProxyDHT
 				
 				LocalKeyState lks = local_key_state.get( key );
 				
-				String str = "pend=" + lks.pending_request + ", act=" + lks.has_active_request + 
-						", lok=" + (lks.last_ok_request==null?"":lks.last_ok_request.getSequence());
+				String str = 
+					"pend=" + (lks.pending_request==null?"":lks.pending_request.getString()) + 
+					", act=" + (lks.active_request==null?"":lks.active_request.getString()) + 
+					", last=" +(lks.last_ok_request==null?"":lks.last_ok_request.getString());
 						
 				log( "    " + ByteFormatter.encodeString(key,0,Math.min(key.length,8)) + " -> " + str );
 			}
@@ -710,7 +808,7 @@ TorProxyDHT
 				
 				lks.pending_request = request;
 				
-				if ( !lks.has_active_request ){
+				if ( lks.active_request == null){
 					
 					queue_request = true;
 				}
@@ -734,11 +832,9 @@ TorProxyDHT
 	{
 		log( "request complete:" + request.getSequence());
 		
-		if ( request.getType() == ProxyLocalRequest.RT_GET ){
-			
-			((ProxyLocalRequestGet)request).setComplete();
-			
-		}else{
+		request.setComplete();
+
+		if ( request.getType() != ProxyLocalRequest.RT_GET ){
 			
 			synchronized( proxy_requests ){
 				
@@ -752,12 +848,12 @@ TorProxyDHT
 					
 				}else{
 					
-					if ( !lks.has_active_request ){
+					if ( lks.active_request == null ){
 						
 						Debug.out( "lks should have active request" );
 					}
 					
-					lks.has_active_request = false;
+					lks.active_request = null;
 					
 					lks.last_ok_time		= SystemTime.getMonotonousTime();
 					lks.last_ok_request 	= request;
@@ -788,12 +884,10 @@ TorProxyDHT
 	{
 		log( "request failed:" + request.getSequence());
 		
-		if ( request.getType() == ProxyLocalRequest.RT_GET ){
-			
-			((ProxyLocalRequestGet)request).setFailed();
-			
-		}else{
-			
+		request.setFailed();
+
+		if ( request.getType() != ProxyLocalRequest.RT_GET ){
+
 			synchronized( proxy_requests ){
 				
 				byte[] key = request.getKey();
@@ -806,12 +900,12 @@ TorProxyDHT
 					
 				}else{
 					
-					if ( !lks.has_active_request ){
+					if ( lks.active_request == null ){
 						
 						Debug.out( "lks should have active request" );
 					}
 					
-					lks.has_active_request = false;
+					lks.active_request = null;
 										
 					if ( lks.pending_request == null ){
 						
@@ -853,7 +947,7 @@ TorProxyDHT
 				
 				LocalKeyState lks = local_key_state.get( key );
 				
-				if ( lks.pending_request == null && !lks.has_active_request && lks.last_ok_time > 0 ){
+				if ( lks.pending_request == null && lks.active_request == null && lks.last_ok_time > 0 ){
 					
 					long elapsed = now - lks.last_ok_time;
 					
@@ -905,10 +999,10 @@ TorProxyDHT
 					
 					ProxyLocalRequestGet get = (ProxyLocalRequestGet)request;
 					
-						// non-active requests get a short timeout as there is no usable
+						// inactive requests get a shorter timeout as there is no usable
 						// proxy
 					
-					long timeout = Math.min( get.getTimeout(), 15*1000 );
+					long timeout = Math.min( get.getTimeout(), 60*1000 );
 					
 					if ( now - get.getStartTime() > timeout ){
 						
@@ -1003,13 +1097,13 @@ TorProxyDHT
 												
 												lks.pending_request = null;
 												
-												if ( lks.has_active_request ){
+												if ( lks.active_request != null ){
 													
 													Debug.out( "lks shouldn't have an active request" );
 													
 												}else{
 													
-													lks.has_active_request = true;
+													lks.active_request = request;
 												}
 											}
 										}
@@ -1351,8 +1445,7 @@ TorProxyDHT
 		try{	
 			if ( LOOPBACK ){
 			
-				target = InetSocketAddress.createUnresolved( "umklbodffjt4jhjm7ysfoej3nctmtm7yatvbopq2lo32x45am3siddqd.onion", 27657);
-				// target = InetSocketAddress.createUnresolved( "nhrtp6h2o7puwq5ce45f3dfvszal3jeq4d5b3lgjxi72k2x5pspz5mad.onion", 27657);
+				target = InetSocketAddress.createUnresolved( "oq3qxj3calntdzn54vqcsshertvbxcwdr56jrufim4jojjvrrdyqlfyd.onion", 27657);
 			}
 			
 			log( "Trying proxy " + target );
@@ -1373,6 +1466,8 @@ TorProxyDHT
 		OutboundConnectionProxy		proxy,
 		String						instance_id )
 	{
+		plugin.log( "Tor proxy DHT initialised, id=" + instance_id );
+		
 		synchronized( proxy_client_fail_map ){
 			
 			proxy_client_consec_fail_count = 0;
@@ -1399,6 +1494,8 @@ TorProxyDHT
 	proxyClientFailed(
 		OutboundConnectionProxy		proxy )
 	{
+		plugin.log( "Tor proxy DHT failed, id=" + proxy.getRemoteInstanceID());
+		
 		synchronized( proxy_requests ){
 	
 			proxy_client_fail_uids.put( proxy.getLocalUID(), "" );
@@ -1520,7 +1617,7 @@ TorProxyDHT
 	
 	private void
 	maskValue(
-		byte[]		torrent_hash,
+		byte[]		key,
 		byte[]		masked_value )
 	
 		throws Exception
@@ -1535,7 +1632,7 @@ TorProxyDHT
 			
 			sha256.update((byte)i);
 			
-			sha256.update( torrent_hash );
+			sha256.update( key );
 			
 			byte[] value_mask = sha256.digest();
 			
@@ -1570,6 +1667,8 @@ TorProxyDHT
 	{
 		if ( ENABLE_LOGGING ){
 		
+			plugin.log( str );
+			
 			System.out.println( str );
 		}
 	}
@@ -1642,8 +1741,8 @@ TorProxyDHT
 				
 			}else if ( now - last_sent_time >= 60*1000 ){
 				
-				Map map = new HashMap<>();
-								
+				Map<String,Object> map = new HashMap<>();
+									
 				send( MT_PROXY_KEEP_ALIVE, map );
 			}
 		}
@@ -1671,8 +1770,8 @@ TorProxyDHT
 		
 		protected void
 		send(
-			int		type,
-			Map		map )
+			int						type,
+			Map<String,Object>		map )
 		{
 			last_sent_time	= SystemTime.getMonotonousTime();
 			
@@ -1684,7 +1783,9 @@ TorProxyDHT
 				
 				log( "send " + map );
 			}
-			
+
+			map.put( "pad", new byte[1+RandomUtils.nextInt(128)]);
+
 			PooledByteBuffer buffer = null;
 			
 			try{
@@ -1716,8 +1817,10 @@ TorProxyDHT
 			last_received_time = SystemTime.getMonotonousTime();
 					
 			try{
-				Map map = BDecoder.decode( message.toByteArray());
-								
+				Map<String,Object> map = BDecoder.decode( message.toByteArray());
+					
+				map.remove( "pad" );
+				
 				int	type = ((Number)map.get( "type" )).intValue();
 				
 				if ( type == MT_PROXY_CLOSE ){
@@ -1743,8 +1846,8 @@ TorProxyDHT
 		
 		protected abstract void
 		receive(
-			int		type,
-			Map		map )
+			int						type,
+			Map<String,Object>		map )
 
 			throws Exception;
 		
@@ -1764,7 +1867,7 @@ TorProxyDHT
 		{
 			if ( connected ){
 			
-				Map map = new HashMap<>();
+				Map<String,Object> map = new HashMap<>();
 				
 				send( MT_PROXY_CLOSE, map );
 			}
@@ -1934,7 +2037,7 @@ TorProxyDHT
 		
 		private volatile boolean	has_been_active;
 		
-		private Map<Long,ActiveRequest>		active_requests = new IdentityHashMap<>();
+		private Map<Long,ActiveRequest>		active_requests = new HashMap<>();
 		
 		private
 		OutboundConnectionProxy(
@@ -2045,12 +2148,12 @@ TorProxyDHT
 					
 					byte[] derived_key = sha256.digest();
 					
-					Map proxy_request = new HashMap<>();
+					Map<String,Object> proxy_request = new HashMap<>();
 
 					proxy_request.put( "op_key", derived_key );
 					proxy_request.put( "op_seq", request.getSequence());
 					
-					Map options = request.getOptions();
+					Map<String,Object> options = request.getOptions();
 					
 					if ( options != null && !options.isEmpty()){
 						
@@ -2059,7 +2162,7 @@ TorProxyDHT
 
 					if ( request.getType() == ProxyLocalRequest.RT_PUT ){
 						
-						Map value = ((ProxyLocalRequestPut)request).getValue();
+						Map<String,Object> value = ((ProxyLocalRequestPut)request).getValue();
 						
 						value = new HashMap<>( value );	// copy as we add to it
 						
@@ -2072,6 +2175,8 @@ TorProxyDHT
 												
 						value.put( "z", sig );
 				
+						value.put( "t", Math.max( SystemTime.getCurrentTime()/1000 - 1600000000, 0L )); // Y2038 problem? :)
+						
 						byte[] masked_value = BEncoder.encode( value );
 						
 						maskValue( key, masked_value );
@@ -2154,7 +2259,7 @@ TorProxyDHT
 			setConnected();
 			
 			try{
-				Map payload = new TreeMap<>();
+				Map<String,Object> payload = new TreeMap<>();
 				
 				payload.put( "source_host", tep_pure_host );
 				payload.put( "source_port", tep_pure_port );
@@ -2165,7 +2270,7 @@ TorProxyDHT
 				
 				byte[] sig = tep_pure.sign( bytes );
 				
-				Map map = new HashMap<>();
+				Map<String,Object> map = new HashMap<>();
 					
 				map.put( "payload", payload );
 				map.put( "sig", sig );
@@ -2183,8 +2288,8 @@ TorProxyDHT
 		@Override
 		public void 
 		receive(
-			int		type,
-			Map		map )
+			int					type,
+			Map<String,Object>	map )
 		
 			throws Exception
 		{
@@ -2206,11 +2311,11 @@ TorProxyDHT
 				
 				map = BDecoder.decodeStrings( map );
 				
-				List<Map> contacts = (List<Map>)map.get( "contacts" );
+				List<Map<String,Object>> contacts = (List<Map<String,Object>>)map.get( "contacts" );
 				
 				List<InetSocketAddress> isas = new ArrayList<>();
 				
-				for ( Map m: contacts ){
+				for ( Map<String,Object> m: contacts ){
 					
 					String	host = (String)m.get( "host" );
 					int		port = ((Number)m.get( "port" )).intValue();
@@ -2251,16 +2356,20 @@ TorProxyDHT
 						if ( request_type == ProxyLocalRequest.RT_GET ){
 							
 							List<byte[]> l_values = (List<byte[]>)map.get( "op_values" );
-							
-							List<Map> values = new ArrayList<>();
+								
+							Map<String, Object[]> value_map = new HashMap<>();
 							
 							for ( byte[] masked_value: l_values ){
 								
 								maskValue( request.getKey(), masked_value );
 								
-								Map value = BDecoder.decode( masked_value );
+								Map<String,Object> value = BDecoder.decode( masked_value );
 								
 								byte[]	sig = (byte[])value.remove( "z" );
+								
+								Number n_time = (Number)value.remove( "t" );
+								
+								int time = n_time==null?0:n_time.intValue();
 								
 								byte[]	host_bytes	= (byte[])value.get( "h" );
 								
@@ -2273,14 +2382,41 @@ TorProxyDHT
 										// don't remove "h" as some uses rely on it, replace with
 										// actual host
 									
-									value.put( "h", I2PHelperPlugin.TorEndpoint.bytesToOnion( host_bytes ));
+									String host = I2PHelperPlugin.TorEndpoint.bytesToOnion( host_bytes );
 									
-									values.add( value );
+									value.put( "h", host );
 									
+									Object[] existing = value_map.get( host );
+									
+									boolean add = false;
+									
+									if ( existing != null ){
+										
+										if (((Integer)existing[0]) < time ){
+											
+											add = true;
+										}
+									}else{
+										
+										add = true;
+									}
+									
+									if ( add ){
+										
+										value_map.put( host, new Object[]{ time, value });
+									}
 								}else{
 									
 									log( "value verification failed, ignoring" );
 								}
+							}
+							
+							
+							List<Map<String,Object>> values = new ArrayList<>(value_map.size());
+
+							for ( Object[] entry: value_map.values()){
+								
+								values.add((Map<String,Object>)entry[1]);
 							}
 							
 							((ProxyLocalRequestGet)request).setValues( values );
@@ -2422,7 +2558,7 @@ TorProxyDHT
 			try{
 					// we use the probe to at least show that the originator is a real service
 				
-				Map map = new HashMap<>();
+				Map<String,Object> map = new HashMap<>();
 				
 				map.put( "uid", uid );
 				map.put( "source_host", tep_mix.getHost());
@@ -2438,8 +2574,8 @@ TorProxyDHT
 		@Override
 		public void 
 		receive(
-			int		type,
-			Map		map )
+			int					type,
+			Map	<String,Object>	map )
 		{
 			if ( type == MT_PROXY_PROBE_REPLY ){
 				
@@ -3031,25 +3167,53 @@ TorProxyDHT
 		{
 			DHTPluginInterface dht = ddb.getDHTPlugin();
 
-			dht.remove( 
+			boolean done = false;
+			
+			DHTPluginOperationListener listener = 
+				new DHTPluginOperationAdapter()
+				{
+					@Override
+					public void 
+					complete(
+						byte[]		masked_key, 
+						boolean		timeout_occurred )
+					{
+						synchronized( dht_key_state ){
+
+							dht_key_state.remove( masked_key );
+						}
+						
+						completed();
+					}
+				};	
+					
+			if ( method_DHTPluginInterface_remove != null ){
+				
+				short s_flags = 0x0100; // DHTPluginInterface.FLAG_PUT_AND_FORGET
+				
+				try{
+					method_DHTPluginInterface_remove.invoke(
+						dht,
+						masked_key, 
+						"TPD write: " + ByteFormatter.encodeString( masked_key ), 
+						s_flags, 
+						listener );
+					
+					done = true;
+					
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+			}
+			
+			if ( !done ){			
+			
+				dht.remove( 
 					masked_key, 
 					"TPD remove: " + ByteFormatter.encodeString(masked_key), 
-					new DHTPluginOperationAdapter()
-					{
-						@Override
-						public void 
-						complete(
-							byte[]		masked_key, 
-							boolean		timeout_occurred )
-						{
-							synchronized( dht_key_state ){
-
-								dht_key_state.remove( masked_key );
-							}
-							
-							completed();
-						}
-					});
+					listener );
+			}
 		}
 	}
 	
@@ -3115,15 +3279,15 @@ TorProxyDHT
 	ProxyRemoteRequestPut
 		extends ProxyRemoteRequest
 	{
-		private final byte[]		value;
-		private final Map			options;
+		private final byte[]				value;
+		private final Map<String,Object>	options;
 		
 		protected
 		ProxyRemoteRequestPut(
 			InboundConnectionProxy		proxy,
 			byte[]						key,
 			byte[]						_value,
-			Map							_options,
+			Map<String,Object>			_options,
 			ProxyRemoteRequestListener	listener )
 		{
 			super( proxy, RT_PUT, key, listener );
@@ -3448,8 +3612,8 @@ TorProxyDHT
 		@Override
 		protected void 
 		receive(
-			int 	type,
-			Map 	request ) 
+			int 				type,
+			Map<String,Object> 	request ) 
 			
 			throws Exception
 		{
@@ -3468,9 +3632,9 @@ TorProxyDHT
 
 				min_version = i_min_ver==null?1:i_min_ver.intValue();
 				
-				Map payload_raw = (Map)request.get( "payload" );
+				Map<String,Object> payload_raw = (Map<String,Object>)request.get( "payload" );
 												
-				Map payload = BDecoder.decodeStrings( payload_raw );
+				Map<String,Object> payload = BDecoder.decodeStrings( payload_raw );
 				
 				String target	= (String)payload.get( "target" );
 				
@@ -3530,7 +3694,7 @@ TorProxyDHT
 				
 				if ( denied ){
 					
-					Map reply = new HashMap<>();
+					Map<String,Object> reply = new HashMap<>();
 															
 					reply.put( "contacts", getBackupContacts());
 					
@@ -3576,7 +3740,7 @@ TorProxyDHT
 				byte[] 	key		= (byte[])request.get( "op_key" );
 				Map		options	= (Map)request.get( "op_options" );
 				
-				Map reply = new HashMap<>();
+				Map<String,Object> reply = new HashMap<>();
 
 				reply.put( "op_seq", seq );
 
@@ -3662,7 +3826,7 @@ TorProxyDHT
 			
 			setState( STATE_ACTIVE );
 
-			Map reply = new HashMap<>();
+			Map<String,Object> reply = new HashMap<>();
 				
 			reply.put( "iid", instance_id );
 			
@@ -3678,10 +3842,8 @@ TorProxyDHT
 			
 			setState( STATE_PROBE_FAILED );
 			
-			Map reply = new HashMap<>();
-						
-			List<Map> l_contacts = new ArrayList<>();
-			
+			Map<String,Object> reply = new HashMap<>();
+									
 			reply.put( "contacts", getBackupContacts());
 			
 			send( MT_PROXY_ALLOC_FAIL_REPLY, reply );
@@ -3693,9 +3855,9 @@ TorProxyDHT
 				
 		private void
 		proxyRemotePut(
-			byte[]				key,
-			byte[]				value,
-			Map					options,
+			byte[]						key,
+			byte[]						value,
+			Map<String,Object>			options,
 			ProxyRemoteRequestListener	listener )
 		{
 			ProxyRemoteRequestPut	request = new ProxyRemoteRequestPut( this, key, value, options, listener );
@@ -3705,9 +3867,9 @@ TorProxyDHT
 		
 		private void
 		proxyRemoteGet(
-			byte[]					key,
-			Map						options,
-			ProxyRemoteRequestListener		listener )
+			byte[]						key,
+			Map<String,Object>			options,
+			ProxyRemoteRequestListener	listener )
 		{
 			ProxyRemoteRequestGet	request = new ProxyRemoteRequestGet( this, key, options, listener );
 			
@@ -3924,8 +4086,8 @@ TorProxyDHT
 		@Override
 		protected void 
 		receive(
-			int 	type,
-			Map 	request ) 
+			int 				type,
+			Map<String,Object> 	request ) 
 			
 			throws Exception
 		{
@@ -3943,7 +4105,7 @@ TorProxyDHT
 				
 				if ( cp != null && cp.getLocalUID().equals( uid )){
 				
-					Map reply = new HashMap<>();
+					Map<String,Object> reply = new HashMap<>();
 				
 					send( MT_PROXY_PROBE_REPLY, reply );
 					
@@ -3981,17 +4143,25 @@ TorProxyDHT
 	
 		private final long			start = SystemTime.getMonotonousTime();
 		
-		private final long			seq	= proxy_request_seq.incrementAndGet();
-		private final byte[]		key;
+		private final long					seq	= proxy_request_seq.incrementAndGet();
+		private final byte[]				key;
+		private	final ProxyRequestListener	listener;
+
+		private Map<String,Object>			options;
 		
-		private Map	options;
-		
+		private AtomicBoolean done = new AtomicBoolean();
+
 		protected
 		ProxyLocalRequest(
-			byte[]		_key )
+			byte[]					_key,
+			ProxyRequestListener	_listener )
 		{
-			key		= _key;
+			key			= _key;
+			listener	= _listener;
 		}
+		
+		protected abstract String
+		getString();
 		
 		protected long
 		getSequence()
@@ -4014,7 +4184,13 @@ TorProxyDHT
 			return( key );
 		}
 		
-		protected Map
+		protected ProxyRequestListener
+		getListener()
+		{
+			return( listener );
+		}
+		
+		protected Map<String,Object>
 		getOptions()
 		{
 			return( options );
@@ -4022,97 +4198,9 @@ TorProxyDHT
 		
 		protected void
 		setOptions(
-			Map		_options )
+			Map<String,Object>		_options )
 		{
 			options	= _options;
-		}
-	}
-	
-	private class
-	ProxyLocalRequestPut
-		extends ProxyLocalRequest
-	{
-		private final Map	value;
-		
-		protected
-		ProxyLocalRequestPut(
-			byte[]		_key,
-			Map			_value )
-		{
-			super( _key );
-			
-			value = _value;
-		}
-		
-		protected int
-		getType()
-		{
-			return( RT_PUT );
-		}
-		
-		protected Map
-		getValue()
-		{
-			return( value );
-		}
-	}
-	
-	private class
-	ProxyLocalRequestGet
-		extends ProxyLocalRequest
-	{
-		private long				timeout = 2*60*1000;
-		private	ProxyGetListener	listener;
-		
-		private AtomicBoolean done = new AtomicBoolean();
-		
-		protected
-		ProxyLocalRequestGet(
-			byte[]		_key )
-		{
-			super( _key );
-		}
-		
-		protected int
-		getType()
-		{
-			return( RT_GET );
-		}
-		
-		protected void
-		setTimeout(
-			long	t )
-		{
-			timeout = t;
-		}
-		
-		protected long
-		getTimeout()
-		{
-			return( timeout );
-		}
-		
-		protected void
-		setListener(
-			ProxyGetListener		_listener )
-		{
-			listener	= _listener;
-		}
-		
-		protected void
-		setValues(
-			List<Map> values )
-		{			
-			if ( listener != null ){
-				
-				try{
-					listener.valuesRead( getKey(), values );
-					
-				}catch( Throwable e ){
-					
-					Debug.out( e );
-				}
-			}
 		}
 		
 		protected void
@@ -4157,16 +4245,115 @@ TorProxyDHT
 	}
 	
 	private class
+	ProxyLocalRequestPut
+		extends ProxyLocalRequest
+	{
+		private final Map<String,Object>	value;
+		
+		protected
+		ProxyLocalRequestPut(
+			byte[]					_key,
+			Map<String,Object>		_value,
+			ProxyRequestListener	_listener )
+		{
+			super( _key, _listener );
+			
+			value = _value;
+		}
+		
+		protected String
+		getString()
+		{
+			return( "put/" + getSequence());
+		}
+
+		protected int
+		getType()
+		{
+			return( RT_PUT );
+		}
+		
+		protected Map<String,Object>
+		getValue()
+		{
+			return( value );
+		}
+	}
+	
+	private class
+	ProxyLocalRequestGet
+		extends ProxyLocalRequest
+	{
+		private long				timeout = 2*60*1000;
+				
+		protected
+		ProxyLocalRequestGet(
+			byte[]					key,
+			ProxyRequestListener	listener )
+		{
+			super( key, listener );
+		}
+		
+		protected String
+		getString()
+		{
+			return( "get/" + getSequence());
+		}
+		
+		protected int
+		getType()
+		{
+			return( RT_GET );
+		}
+		
+		protected void
+		setTimeout(
+			long	t )
+		{
+			timeout = t;
+		}
+		
+		protected long
+		getTimeout()
+		{
+			return( timeout );
+		}
+		
+		protected void
+		setValues(
+			List<Map<String,Object>> values )
+		{		
+			ProxyRequestListener	listener = getListener();
+			
+			if ( listener != null ){
+				
+				try{
+					listener.valuesRead( getKey(), values );
+					
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+			}
+		}
+	}
+	
+	private class
 	ProxyLocalRequestRemove
 		extends ProxyLocalRequest
 	{
-		private final List<Map>		values = new ArrayList<>();
-		
 		protected
 		ProxyLocalRequestRemove(
-			byte[]		_key )
+			byte[]					key,
+			ProxyRequestListener	listener )
 		{
-			super( _key );
+			super( key, listener );
+		}
+		
+		protected String
+		getString()
+		{
+			return( "del/" + getSequence());
 		}
 		
 		protected int
@@ -4177,17 +4364,29 @@ TorProxyDHT
 	}
 	
 	public interface
-	ProxyGetListener
+	ProxyRequestListener
 	{
 		public void
 		valuesRead(
-			byte[]				key,
-			List<Map>			value );
+			byte[]							key,
+			List<Map<String,Object>>		value );
 		
 		public void
 		complete(
 			byte[]				key,
 			boolean				timeout );
+	}
+	
+	public abstract class
+	ProxyRequestAdapter
+		implements ProxyRequestListener
+	{
+		public void
+		valuesRead(
+			byte[]							key,
+			List<Map<String,Object>>		value )
+		{
+		}
 	}
 	
 	public interface
@@ -4203,5 +4402,18 @@ TorProxyDHT
 		proxyComplete(
 			byte[]		key,
 			boolean		timeout );
+	}
+	
+	public abstract static class
+	TorProxyDHTAdapter
+		implements TorProxyDHTListener
+	{
+		public void
+		proxyValueRead(
+			InetSocketAddress	originator,
+			boolean				is_seed,
+			boolean				crypto_required )
+		{
+		}
 	}
 }
