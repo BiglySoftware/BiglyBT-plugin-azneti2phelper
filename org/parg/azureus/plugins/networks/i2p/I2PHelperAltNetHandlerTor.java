@@ -220,9 +220,10 @@ I2PHelperAltNetHandlerTor
 				
 				if ( seen < 0 ){
 					
-						// local
+						// local, make ourselves look a bit old so we don't always end up as the 
+						// freshest contact
 					
-					seen_secs = (int)( SystemTime.getMonotonousTime()/1000) - RandomUtils.nextInt( 60 );
+					seen_secs = (int)( SystemTime.getMonotonousTime()/1000) - 120 - RandomUtils.nextInt( 240 );
 					
 					version	= LOCAL_VERSION;
 					
