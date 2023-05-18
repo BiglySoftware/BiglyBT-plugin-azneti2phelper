@@ -80,7 +80,7 @@ public class
 TorProxyDHT
 {
 	private static final boolean	LOOPBACK			= false;
-	private static final boolean	ENABLE_LOGGING		= false;
+	private static final boolean	ENABLE_LOGGING		= true;
 	
 	private static final boolean	ENABLE_PROXY_CLIENT = true;
 	private static final boolean	ENABLE_PROXY_SERVER = true;
@@ -108,9 +108,9 @@ TorProxyDHT
 	private static final int PROXY_OP_GET		= 2;
 	private static final int PROXY_OP_REMOVE	= 3;
 	
-	private static final int MAX_SERVER_PROXIES	= 4;
+	private static final int MAX_SERVER_PROXIES	= 5;
 	
-	private static final int MAX_PROXY_KEY_STATE			= 256;
+	private static final int MAX_PROXY_KEY_STATE			= 200;
 	private static final int MAX_GLOBAL_KEY_STATE			= MAX_PROXY_KEY_STATE * MAX_SERVER_PROXIES;
 
 		// methods introduced in 3301 - remove when safe to do so!
@@ -322,7 +322,7 @@ TorProxyDHT
 							
 							checkRequestTimeouts();
 							
-							long now = SystemTime.getMonotonousTime();
+							long now_mono = SystemTime.getMonotonousTime();
 							
 							if ( proxy_client_consec_fail_count < 10 || tick_count % 3 == 0 ){
 							
@@ -359,12 +359,12 @@ TorProxyDHT
 								
 								for ( Connection con: connections ){
 										
-									con.timerTick( now );
+									con.timerTick( now_mono );
 									
 									if ( 	con != current_client_proxy && 
 											!( con instanceof InboundConnectionProxy && server_proxies.contains((InboundConnectionProxy)con ))){
 										
-										if ( con.getAgeSeconds( now ) > 120 ){
+										if ( con.getAgeSeconds() > 120 ){
 											
 											con.failed( new Exception( "Dead connection" ));
 										}
@@ -756,7 +756,7 @@ TorProxyDHT
 			
 			log( "LKS size=" + local_key_state.size());
 			
-			long now = SystemTime.getMonotonousTime();
+			long now = SystemTime.getCurrentTime();
 			
 			for ( byte[] key: local_key_state.keys()){
 				
@@ -852,7 +852,7 @@ TorProxyDHT
 		OutboundConnectionProxy		proxy,
 		ProxyLocalRequest			request )
 	{
-		log( "request complete:" + request.getSequence() + ", elapsed=" + (SystemTime.getMonotonousTime() - request.getStartTime()));
+		log( "request complete:" + request.getSequence() + ", elapsed=" + (SystemTime.getMonotonousTime() - request.getStartTimeMono()));
 		
 		request.setComplete();
 
@@ -883,7 +883,7 @@ TorProxyDHT
 					
 					lks.active_request = null;
 					
-					lks.last_ok_time		= SystemTime.getMonotonousTime();
+					lks.last_ok_time		= SystemTime.getCurrentTime();
 					lks.last_ok_request 	= request;
 					
 					if ( lks.pending_request != null ){
@@ -925,9 +925,7 @@ TorProxyDHT
 				
 				if ( proxy_client_get_fails >= 3 ){
 					
-					long now = SystemTime.getMonotonousTime();
-
-					if ( proxy.getAgeSeconds( now ) > 3*60 ){
+					if ( proxy.getAgeSeconds() > 3*60 ){
 						
 						if ( proxy == active_client_proxy ){
 							
@@ -998,7 +996,7 @@ TorProxyDHT
 				return;
 			}
 				
-			long now = SystemTime.getMonotonousTime();
+			long now = SystemTime.getCurrentTime();
 			
 			boolean added = false;
 			
@@ -1060,7 +1058,7 @@ TorProxyDHT
 	private void
 	checkRequestTimeouts()
 	{
-		long now = SystemTime.getMonotonousTime();
+		long now_mono = SystemTime.getMonotonousTime();
 		
 		OutboundConnectionProxy	proxy;
 		
@@ -1085,7 +1083,7 @@ TorProxyDHT
 					
 					long timeout = Math.min( get.getTimeout(), 60*1000 );
 					
-					if ( now - get.getStartTime() > timeout ){
+					if ( now_mono - get.getStartTimeMono() > timeout ){
 						
 						failed.add( request );
 						
@@ -1290,11 +1288,20 @@ TorProxyDHT
 			return;
 		}
 		
+		OutboundConnectionProxy close_if_idle = null;
+		
 		synchronized( connections ){
 			
 			if ( current_client_proxy != null && !current_client_proxy.isClosed()){
 				
-				return;
+				if ( current_client_proxy.isTired()){			
+				
+					close_if_idle = current_client_proxy;
+					
+				}else{
+					
+					return;
+				}
 			}
 			
 			if ( checking_client_proxy ){
@@ -1307,6 +1314,11 @@ TorProxyDHT
 			checking_client_proxy = true;
 		}
 		
+		if ( close_if_idle != null ){
+		
+			close_if_idle.closeIfIdle();
+		}
+			
 		AEThread2.createAndStartDaemon( "ProxyClientCheck", ()->{
 										
 				try{
@@ -1547,7 +1559,7 @@ TorProxyDHT
 		OutboundConnectionProxy		proxy,
 		String						instance_id )
 	{
-		plugin.log( "Tor proxy DHT initialised, id=" + instance_id );
+		plugin.log( "Tor proxy DHT initialised, id=" + instance_id + ", cid=" + proxy.getConnectionID());
 		
 		synchronized( proxy_client_fail_map ){
 			
@@ -1577,7 +1589,7 @@ TorProxyDHT
 	proxyClientFailed(
 		OutboundConnectionProxy		proxy )
 	{
-		plugin.log( "Tor proxy DHT failed, id=" + proxy.getRemoteInstanceID());
+		plugin.log( "Tor proxy DHT failed, id=" + proxy.getRemoteInstanceID() + ", cid=" + proxy.getConnectionID());
 		
 		synchronized( proxy_requests ){
 	
@@ -1774,14 +1786,15 @@ TorProxyDHT
 	{	
 		private final int	connection_id	= conn_id_next.incrementAndGet();
 		
-		private final long	start_time = SystemTime.getMonotonousTime();
+		private final long	start_time		= SystemTime.getCurrentTime();
+		private final long	start_time_mono = SystemTime.getMonotonousTime();
 		
 		private GenericMessageConnection	gmc;
 		
-		private long	last_received_time	= start_time;
-		private long	last_sent_time		= start_time;
+		private long	last_received_time_mono	= start_time_mono;
+		private long	last_sent_time_mono		= start_time_mono;
 				
-		private long	disconnect_after	= -1;
+		private long	disconnect_after_mono	= -1;
 		
 		private volatile boolean	connected;
 		
@@ -1791,6 +1804,12 @@ TorProxyDHT
 		Connection()
 		{
 			log( getName() + ": created" );
+		}
+		
+		protected int
+		getConnectionID()
+		{
+			return( connection_id );
 		}
 		
 		protected void
@@ -1818,7 +1837,7 @@ TorProxyDHT
 		{
 			if ( this instanceof OutboundConnection ){
 			
-				log( getName() + ": connected (" + ( SystemTime.getMonotonousTime() - start_time )/1000 + "s)");
+				log( getName() + ": connected (" + ( SystemTime.getMonotonousTime() - start_time_mono )/1000 + "s)");
 			}
 			
 			connected	= true;
@@ -1826,9 +1845,9 @@ TorProxyDHT
 		
 		private void
 		timerTick(
-			long	now )
+			long	now_mono )
 		{
-			if ( disconnect_after >= 0 && now > disconnect_after ){
+			if ( disconnect_after_mono >= 0 && now_mono > disconnect_after_mono ){
 				
 				failed( new Exception( "Force disconnect" ));
 				
@@ -1840,11 +1859,11 @@ TorProxyDHT
 				return;
 			}
 			
-			if ( now - last_received_time > 120*1000 ){
+			if ( now_mono - last_received_time_mono > 120*1000 ){
 				
 				failed( new Exception( "Inactivity timeout" ));
 				
-			}else if ( now - last_sent_time >= 35*1000 + RandomUtils.nextInt(10*1000 )){
+			}else if ( now_mono - last_sent_time_mono >= 35*1000 + RandomUtils.nextInt(10*1000 )){
 				
 				SimpleTimer.addEvent(
 					"KeepAlive",
@@ -1860,10 +1879,9 @@ TorProxyDHT
 		}
 		
 		protected int
-		getAgeSeconds(
-			long		now )
+		getAgeSeconds()
 		{
-			return((int)((now - start_time)/1000));
+			return((int)((SystemTime.getCurrentTime() - start_time)/1000));
 		}
 		
 		protected void
@@ -1872,11 +1890,11 @@ TorProxyDHT
 		{
 			if ( secs < 0 ){
 				
-				disconnect_after = -1;
+				disconnect_after_mono = -1;
 				
 			}else{
 				
-				disconnect_after = SystemTime.getMonotonousTime() + secs*1000;
+				disconnect_after_mono = SystemTime.getMonotonousTime() + secs*1000;
 			}
 		}
 		
@@ -1885,7 +1903,7 @@ TorProxyDHT
 			int						type,
 			Map<String,Object>		map )
 		{
-			last_sent_time	= SystemTime.getMonotonousTime();
+			last_sent_time_mono	= SystemTime.getMonotonousTime();
 			
 			map.put( "type", type );
 			
@@ -1926,7 +1944,7 @@ TorProxyDHT
 					
 			throws MessageException
 		{
-			last_received_time = SystemTime.getMonotonousTime();
+			last_received_time_mono = SystemTime.getMonotonousTime();
 					
 			try{
 				Map<String,Object> map = BDecoder.decode( message.toByteArray());
@@ -1937,7 +1955,7 @@ TorProxyDHT
 				
 				if ( type == MT_PROXY_CLOSE ){
 					
-					disconnect_after = 0;
+					disconnect_after_mono = 0;
 					
 				}else if ( type != MT_PROXY_KEEP_ALIVE ){
 				
@@ -2037,7 +2055,7 @@ TorProxyDHT
 			}
 			
 			try{
-				if ( disconnect_after == -1 ){
+				if ( disconnect_after_mono == -1 ){
 				
 						// unexpected
 					
@@ -2075,9 +2093,9 @@ TorProxyDHT
 		protected String
 		getString()
 		{
-			long now = SystemTime.getMonotonousTime();
+			long now_mono = SystemTime.getMonotonousTime();
 			
-			return( getName() + ", idle_in=" + (now - last_received_time)/1000 + "s, idle_out=" + (now - last_sent_time)/1000 + "s");
+			return( getName() + ", idle_in=" + (now_mono - last_received_time_mono)/1000 + "s, idle_out=" + (now_mono - last_sent_time_mono)/1000 + "s");
 		}
 		
 		protected boolean
@@ -2153,6 +2171,7 @@ TorProxyDHT
 		public static final int STATE_ACTIVE		= 1;
 		public static final int STATE_FAILED		= 2;
 		
+		private final int		max_age_secs		= 2*60*60 + RandomUtils.nextInt( 60*60 );
 		private final String	tep_pure_host;
 		private final int		tep_pure_port;
 		private final byte[]	tep_pure_host_bytes;	// prefer to use pk but sha3_256 not in Java 8 ...
@@ -2165,6 +2184,8 @@ TorProxyDHT
 		private volatile boolean	has_been_active;
 		
 		private Map<Long,ActiveRequest>		active_requests = new HashMap<>();
+		
+		private boolean closing_on_idle;
 		
 		private
 		OutboundConnectionProxy(
@@ -2237,6 +2258,29 @@ TorProxyDHT
 			return( has_been_active );
 		}
 		
+		protected boolean
+		isTired()
+		{
+			return( getAgeSeconds() > max_age_secs );
+		}
+		
+		protected void
+		closeIfIdle()
+		{
+			synchronized( this ){
+				
+				if ( active_requests.isEmpty()){
+					
+					closing_on_idle = true;
+				}
+			}
+			
+			if ( closing_on_idle ){
+				
+				failed( new Exception( "Proxy is tired" ), true );
+			}
+		}
+		
 		protected void
 		addRequest(
 			ProxyLocalRequest			request,
@@ -2246,7 +2290,7 @@ TorProxyDHT
 			
 			synchronized( this ){
 				
-				if ( state == STATE_ACTIVE ){
+				if ( state == STATE_ACTIVE && !closing_on_idle ){
 					
 					ar = new ActiveRequest( request, listener );
 					
@@ -2302,7 +2346,7 @@ TorProxyDHT
 												
 						value.put( "z", sig );
 				
-						value.put( "t", Math.max( SystemTime.getCurrentTime()/1000 - 1600000000 + time_skew, 0L )); // Y2038 problem? :)
+						value.put( "t", Math.max( SystemTime.getCurrentTime()/1000 - 1600000000L + time_skew, 0L )); // Y2038 problem? :)
 						
 						byte[] masked_value = BEncoder.encode( value );
 						
@@ -2343,7 +2387,7 @@ TorProxyDHT
 		protected void
 		checkRequestTimeouts()
 		{
-			long now = SystemTime.getMonotonousTime();
+			long now_mono = SystemTime.getMonotonousTime();
 			
 			List<ActiveRequest>	failed = new ArrayList<>();
 			
@@ -2361,7 +2405,7 @@ TorProxyDHT
 						
 						ProxyLocalRequestGet get = (ProxyLocalRequestGet)request;
 						
-						if ( now - get.getStartTime() > get.getTimeout()){
+						if ( now_mono - get.getStartTimeMono() > get.getTimeout()){
 														
 							failed.add( ar );
 							
@@ -2482,7 +2526,7 @@ TorProxyDHT
 						
 						if ( request_type == ProxyLocalRequest.RT_GET ){
 							
-							long offset_time = Math.max( SystemTime.getCurrentTime()/1000 - 1600000000, 0L );
+							long offset_time = Math.max( SystemTime.getCurrentTime()/1000 - 1600000000L, 0L );
 							
 							List<byte[]> l_values = (List<byte[]>)map.get( "op_values" );
 								
@@ -2521,7 +2565,7 @@ TorProxyDHT
 									
 									if ( time > 0 && offset_time - time > 2 * DHTControl.ORIGINAL_REPUBLISH_INTERVAL_DEFAULT/1000 ){
 										
-										//  log( "value time too ancient (" + TimeFormatter.formatColon( offset_time - time ) + "), host=" + host + ", ignoring" );
+										// log( "value time too ancient (" + TimeFormatter.formatColon( offset_time - time ) + "), host=" + host + ", ignoring" );
 
 									}else{
 										
@@ -2608,9 +2652,7 @@ TorProxyDHT
 		protected String
 		getString()
 		{
-			long now = SystemTime.getMonotonousTime();
-			
-			return( super.getString() + "; state=" + getState() + "; age=" + TimeFormatter.formatColon(getAgeSeconds(now)));
+			return( super.getString() + "; state=" + getState() + "; age=" + TimeFormatter.formatColon(getAgeSeconds()));
 		}
 		
 		private class
@@ -2785,7 +2827,7 @@ TorProxyDHT
 		public static final int RT_GET			= 2;
 		public static final int RT_REMOVE		= 3;
 
-		private final long							create_time = SystemTime.getMonotonousTime();
+		private final long							create_time_mono = SystemTime.getMonotonousTime();
 		
 		private final InboundConnectionProxy		proxy;
 		private final int							type;
@@ -2820,9 +2862,9 @@ TorProxyDHT
 		}
 		
 		protected long
-		getCreateTime()
+		getCreateTimeMono()
 		{
-			return( create_time );
+			return( create_time_mono );
 		}
 		
 		protected byte[]
@@ -2898,7 +2940,7 @@ TorProxyDHT
 	private void
 	printGlobalKeyState()
 	{
-		long now = SystemTime.getMonotonousTime();
+		long now = SystemTime.getCurrentTime();
 
 		synchronized( dht_key_state ){
 			
@@ -2943,7 +2985,7 @@ TorProxyDHT
 	private void
 	checkGlobalKeyState()
 	{
-		long now = SystemTime.getMonotonousTime();
+		long now = SystemTime.getCurrentTime();
 		
 		synchronized( dht_key_state ){
 			
@@ -3197,7 +3239,7 @@ TorProxyDHT
 			
 			synchronized( dht_key_state ){
 
-				dht_key_state.put( masked_key, SystemTime.getMonotonousTime());
+				dht_key_state.put( masked_key, SystemTime.getCurrentTime());
 			}
 			
 			DHTPluginOperationListener listener = 
@@ -3211,7 +3253,7 @@ TorProxyDHT
 					{
 						synchronized( dht_key_state ){
 	
-							dht_key_state.put( masked_key, SystemTime.getMonotonousTime());
+							dht_key_state.put( masked_key, SystemTime.getCurrentTime());
 						}
 						
 						completed();
@@ -3561,7 +3603,7 @@ TorProxyDHT
 		execute()
 		{
 			try{
-				long queued = SystemTime.getMonotonousTime() - getCreateTime();
+				long queued = SystemTime.getMonotonousTime() - getCreateTimeMono();
 				
 				timeout -= queued;
 				
@@ -3986,7 +4028,7 @@ TorProxyDHT
 				
 				if ( sks != null ){
 					
-					if ( SystemTime.getMonotonousTime() -  ((Long)sks[0]).longValue() < 120*60*60 ){
+					if ( SystemTime.getMonotonousTime() -  ((Long)sks[0]).longValue() < 2*60*1000 ){
 						
 						saved_keys = (List<byte[]>)sks[1];
 					}
@@ -4194,7 +4236,7 @@ TorProxyDHT
 					return;
 				}
 				
-				long now = SystemTime.getMonotonousTime();
+				long now_mono = SystemTime.getMonotonousTime();
 				
 				Iterator<ProxyRemoteRequest> it = requests.iterator();
 				
@@ -4202,7 +4244,7 @@ TorProxyDHT
 					
 					ProxyRemoteRequestGet request = (ProxyRemoteRequestGet)it.next();
 									
-					long elapsed = now - request.getCreateTime();
+					long elapsed = now_mono - request.getCreateTimeMono();
 										
 					if ( elapsed > request.getTimeout()){
 						
@@ -4249,9 +4291,7 @@ TorProxyDHT
 		protected String
 		getString()
 		{
-			long now = SystemTime.getMonotonousTime();
-			
-			return( super.getString() + ": " + source_host + "; state=" + getState() + "; age=" + TimeFormatter.formatColon(getAgeSeconds(now)));
+			return( super.getString() + ": " + source_host + "; state=" + getState() + "; age=" + TimeFormatter.formatColon(getAgeSeconds()));
 		}
 	}
 	
@@ -4333,7 +4373,7 @@ TorProxyDHT
 		public static final int RT_GET			= 2;
 		public static final int RT_REMOVE		= 3;
 	
-		private final long			start = SystemTime.getMonotonousTime();
+		private final long		start_mono = SystemTime.getMonotonousTime();
 		
 		private final long					seq	= proxy_request_seq.incrementAndGet();
 		private final byte[]				key;
@@ -4362,9 +4402,9 @@ TorProxyDHT
 		}
 		
 		protected long
-		getStartTime()
+		getStartTimeMono()
 		{
-			return( start );
+			return( start_mono );
 		}
 		
 		protected abstract int
