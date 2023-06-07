@@ -1515,6 +1515,7 @@ I2PDHTTrackerPlugin
 								hash, 
 								is_complete, 
 								NUM_WANT,
+								LOOKUP_TIMEOUT,
 								get_adapter );
 					}
 					
@@ -1564,6 +1565,7 @@ I2PDHTTrackerPlugin
 								hash, 
 								is_complete, 
 								NUM_WANT,
+								LOOKUP_TIMEOUT,
 								get_adapter );
 						}
 					}

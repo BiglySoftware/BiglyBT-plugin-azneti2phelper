@@ -56,6 +56,7 @@ import com.biglybt.core.util.TimerEventPerformer;
 import com.biglybt.pif.PluginAdapter;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.ddb.DistributedDatabase;
+import com.biglybt.pif.ipc.IPCInterface;
 import com.biglybt.pif.messaging.MessageException;
 import com.biglybt.pif.messaging.MessageManager;
 import com.biglybt.pif.messaging.generic.GenericMessageConnection;
@@ -104,6 +105,10 @@ TorProxyDHT
 	private static final int MT_PROXY_OP_REQUEST		= 7;
 	private static final int MT_PROXY_OP_REPLY			= 8;
 
+	private static final int FR_UNKNOWN			= 0;
+	private static final int FR_DENIED			= 1;
+	private static final int FR_PROBE_FAILED	= 2;
+	
 	private static final int PROXY_OP_PUT		= 1;
 	private static final int PROXY_OP_GET		= 2;
 	private static final int PROXY_OP_REMOVE	= 3;
@@ -125,7 +130,7 @@ TorProxyDHT
 	
 	private DistributedDatabase	ddb ;
 
-	private final String	instance_id;
+	private final String	my_instance_id;
 	private final int		time_skew = RandomUtils.nextInt(60)-30;
 	
 	private final RateLimiter inbound_limiter;
@@ -146,13 +151,16 @@ TorProxyDHT
 
 	private InetSocketAddress failed_client_proxy;
 	
-	private int	proxy_client_get_fails;
+	private int		proxy_client_get_fails;
+	private long	proxy_client_last_get_fail_mono = SystemTime.getMonotonousTime();
 	
 	private int failed_client_proxy_retry_count = 0;
 	
 	private int PROXY_FAIL_MAX	= 256;
 	
 	private volatile int proxy_client_consec_fail_count;
+	
+	private AtomicInteger	proxy_client_consec_probe_fails = new AtomicInteger();
 	
 	private Map<String,String>		proxy_client_fail_map = 
 		new LinkedHashMap<String,String>(PROXY_FAIL_MAX,0.75f,true)
@@ -165,6 +173,9 @@ TorProxyDHT
 				return size() > PROXY_FAIL_MAX;
 			}
 		};
+	
+	
+	private long last_server_restart	= -1;
 		
 	private int PROXY_BACKUP_MAX	= 64;
 		
@@ -201,6 +212,26 @@ TorProxyDHT
 			}
 		};
 		
+		
+	private final ByteArrayHashMap<Long>	dht_key_state = new ByteArrayHashMap<>();
+	
+	private final LinkedList<DHTRemoteRequest>[]		dht_remote_queued = new LinkedList[2];
+	private final ByteArrayHashMap<DHTRemoteRequest>[]	dht_remote_active = new ByteArrayHashMap[2];
+	
+	{
+		dht_remote_queued[0] = new LinkedList<>();
+		dht_remote_queued[1] = new LinkedList<>();
+		
+		dht_remote_active[0] = new ByteArrayHashMap<>();
+		dht_remote_active[1] = new ByteArrayHashMap<>();
+	}
+	
+	private final int[] DHT_REMOTE_MAX_ACTIVE_REQUESTS = { 16, 16 };
+		
+	private final AtomicInteger	stats_client_total = new AtomicInteger();
+	private final AtomicInteger	stats_server_total = new AtomicInteger();
+		
+		
 	private volatile boolean destroyed;
 	
 	public
@@ -234,7 +265,7 @@ TorProxyDHT
 		
 		RandomUtils.nextSecureBytes( temp );
 		
-		instance_id = Base32.encode( temp );
+		my_instance_id = Base32.encode( temp );
 		
 		ConnectionManager cman = plugin_interface.getConnectionManager();
 
@@ -329,7 +360,14 @@ TorProxyDHT
 								checkClientProxy( true );
 							}
 							
-							if ( tick_count % 3 == 0 ){
+							boolean is_30_secs 	= tick_count % 3 == 0;
+							boolean is_minute	= tick_count % 6 == 0;
+
+								// need to do this frequently so request timeouts are relatively accurately enforced
+
+							checkServerProxies( is_minute );
+
+							if ( is_30_secs ){
 								
 								if ( ENABLE_LOGGING ){
 									
@@ -337,7 +375,7 @@ TorProxyDHT
 									
 									printLocalKeyState();
 								
-									if ( tick_count % 6 == 0 ){
+									if ( is_minute ){
 										
 										OutboundConnectionProxy ccp = current_client_proxy;
 																				
@@ -354,8 +392,6 @@ TorProxyDHT
 										}
 									}
 								}
-
-								checkServerProxies();
 								
 								for ( Connection con: connections ){
 										
@@ -468,6 +504,7 @@ TorProxyDHT
 		byte[]					torrent_hash,
 		boolean					is_seed,
 		int						num_want,
+		long					local_timeout,
 		TorProxyDHTListener		listener )
 	{
 		log( "proxyTrackerGet: " + ByteFormatter.encodeString(torrent_hash) + "/" + is_seed + "/" + num_want );
@@ -480,19 +517,26 @@ TorProxyDHT
 			sha256.update( torrent_hash );
 			
 			byte[] key = sha256.digest();
-	
-			long timeout = 2*60*1000;
+			
+				// lower the remote timeout to allow for transmission delays
+			
+			long remote_timeout = local_timeout - TIMER_PERIOD * 2;
+			
+			if ( remote_timeout <= TIMER_PERIOD * 2 ){
+				
+				throw( new Exception( "Timeout too small" ));
+			}
 			
 			Map<String,Object>	options = new HashMap<>();
 			
 			options.put( "f", is_seed?DHTPluginInterface.FLAG_SEEDING:DHTPluginInterface.FLAG_DOWNLOADING );
-			options.put( "t", timeout );
+			options.put( "t", remote_timeout );
 			options.put( "n", num_want );
 	
 			proxyLocalGet( 
 				key, 
 				options, 
-				timeout,
+				local_timeout,
 				new ProxyRequestListener()
 				{	
 					@Override
@@ -908,7 +952,7 @@ TorProxyDHT
 	
 	private void
 	requestFailed(
-		OutboundConnectionProxy		proxy,
+		OutboundConnectionProxy		proxy_maybe_null,
 		ProxyLocalRequest			request )
 	{
 		log( "request failed:" + request.getSequence());
@@ -919,19 +963,28 @@ TorProxyDHT
 
 			OutboundConnectionProxy failed = null;
 			
+			long now_mono = SystemTime.getMonotonousTime();
+			
 			synchronized( proxy_client_fail_map ){
 
-				proxy_client_get_fails++;
+					// avoid counting a burst of fails, we're just trying to figure out if the client is long-term-crap 
+				
+				if ( now_mono - proxy_client_last_get_fail_mono > 10*1000 ){
+				
+					proxy_client_last_get_fail_mono = now_mono;
+					
+					proxy_client_get_fails++;
+				}
 				
 				if ( proxy_client_get_fails >= 3 ){
 					
-					if ( proxy.getAgeSeconds() > 3*60 ){
+					if ( proxy_maybe_null != null && proxy_maybe_null.getAgeSeconds() > 3*60 ){
 						
-						if ( proxy == active_client_proxy ){
+						if ( proxy_maybe_null == active_client_proxy ){
 							
-							failed = proxy;
+							failed = proxy_maybe_null;
 							
-							proxy_client_fail_map.put( proxy.getHost(), "" );
+							proxy_client_fail_map.put( proxy_maybe_null.getHost(), "" );
 							
 							proxy_client_get_fails = 0;
 						}
@@ -1060,13 +1113,13 @@ TorProxyDHT
 	{
 		long now_mono = SystemTime.getMonotonousTime();
 		
-		OutboundConnectionProxy	proxy;
+		OutboundConnectionProxy	proxy_maybe_null;
 		
 		List<ProxyLocalRequest>	failed = new ArrayList<>();
 		
 		synchronized( proxy_requests ){
 			
-			proxy = active_client_proxy;
+			proxy_maybe_null = active_client_proxy;
 			
 			Iterator<ProxyLocalRequest>	it = proxy_requests.iterator();
 			
@@ -1095,12 +1148,12 @@ TorProxyDHT
 		
 		for ( ProxyLocalRequest r: failed ){
 			
-			requestFailed( proxy, r );
+			requestFailed( proxy_maybe_null, r );
 		}
 		
-		if ( proxy != null ){
+		if ( proxy_maybe_null != null ){
 			
-			proxy.checkRequestTimeouts();
+			proxy_maybe_null.checkRequestTimeouts();
 		}
 	}
 	
@@ -1349,17 +1402,18 @@ TorProxyDHT
 	}
 	
 	private void
-	checkServerProxies()
+	checkServerProxies(
+		boolean log )
 	{
 		if ( destroyed ){
 			
 			return;
 		}
-		
-			// just in case
-		
+				
 		for ( InboundConnectionProxy sp: server_proxies ){
-			
+		
+				// just in case
+
 			if ( sp.isClosed()){
 				
 				server_proxies.remove( sp);
@@ -1368,7 +1422,7 @@ TorProxyDHT
 				
 				// sp.failed( new Exception("test close"));
 				
-				sp.checkRequests();
+				sp.checkRequests( log );
 			}
 		}
 	}
@@ -1561,6 +1615,10 @@ TorProxyDHT
 	{
 		plugin.log( "Tor proxy DHT initialised, id=" + instance_id + ", cid=" + proxy.getConnectionID());
 		
+		stats_client_total.incrementAndGet();
+		
+		proxy_client_consec_probe_fails.set(0);
+
 		synchronized( proxy_client_fail_map ){
 			
 			proxy_client_consec_fail_count = 0;
@@ -1602,21 +1660,67 @@ TorProxyDHT
 			
 			checkRequestDispatcher();
 		}
+		
+		if ( proxy_client_consec_probe_fails.get() > 10 ){
+			
+			restartServer();
+		}
+	}
+	
+	private void
+	restartServer()
+	{
+		boolean do_restart = false;
+		
+		synchronized( proxy_client_fail_map ){
+			
+			long mono_now = SystemTime.getMonotonousTime();
+			
+			if ( last_server_restart == -1 || mono_now - last_server_restart > 10*60*1000 ){
+				
+				proxy_client_consec_probe_fails.set( 0 );
+				
+				last_server_restart = mono_now;
+				
+				do_restart = true;
+			}
+		}
+		
+		if ( do_restart ){
+	
+			try{
+				PluginInterface pi = plugin_interface.getPluginManager().getPluginInterfaceByID( "aznettor", true );
+				
+				IPCInterface ipc = pi.getIPC();
+				
+				if ( ipc.canInvoke( "requestRestart", new Object[0] )){
+					
+					log( "Restarting server due to consecutive probe fails" );
+					
+					ipc.invoke( "requestRestart", new Object[0] );
+				}
+				
+			}catch( Throwable e ){
+				
+				log( "Failed to restart server: " + Debug.getNestedExceptionMessage( e ));
+			}
+		}
 	}
 	
 	private void
 	proxyServerSetupComplete(
-		InboundConnectionProxy	proxy,
-		String					instance_id )
+		InboundConnectionProxy	proxy )
 	{
+		stats_server_total.incrementAndGet();
 		
+		plugin.log( "Tor proxy DHT client accepted, uid=" + proxy.getRemoteUID() + ", cid=" + proxy.getConnectionID());
 	}
 	
 	private void
 	proxyServerFailed(
 		InboundConnectionProxy	proxy )
 	{
-		
+		plugin.log( "Tor proxy DHT client failed, id=" + proxy.getRemoteUID() + ", cid=" + proxy.getConnectionID());
 	}
 	
 	private void
@@ -1789,6 +1893,8 @@ TorProxyDHT
 		private final long	start_time		= SystemTime.getCurrentTime();
 		private final long	start_time_mono = SystemTime.getMonotonousTime();
 		
+		private final boolean do_stats;
+		
 		private GenericMessageConnection	gmc;
 		
 		private long	last_received_time_mono	= start_time_mono;
@@ -1801,8 +1907,11 @@ TorProxyDHT
 		private volatile boolean failed;
 		private volatile boolean permanent_failure;
 		
-		Connection()
+		Connection(
+			boolean		_do_stats )
 		{
+			do_stats = _do_stats;
+			
 			log( getName() + ": created" );
 		}
 		
@@ -1909,11 +2018,29 @@ TorProxyDHT
 			
 			map.put( "ver", I2PHelperAltNetHandlerTor.LOCAL_VERSION );
 
+			if ( do_stats ){
+				
+				Map<String,Object> stats = new HashMap<>();
+				
+				stats.put( "ct",  stats_client_total.get());
+				stats.put( "st",  stats_server_total.get());
+				
+				stats.put( "cc", current_client_proxy==null?0:1 );
+				stats.put( "sc", server_proxies.size());
+				
+				synchronized( dht_key_state ){
+					
+					stats.put( "dk",  dht_key_state.size());
+				}
+				
+				map.put( "stats", stats );
+			}
+			
 			if ( type != MT_PROXY_KEEP_ALIVE ){
 				
 				log( "send " + map );
 			}
-
+			
 			map.put( "pad", new byte[1+RandomUtils.nextInt(128)]);
 
 			PooledByteBuffer buffer = null;
@@ -2043,6 +2170,15 @@ TorProxyDHT
 			Throwable 	error,
 			boolean		perm_fail )
 		{
+			String msg =  Debug.getNestedExceptionMessage( error );
+			
+				// SOCKS 4(a): connection declined [0/91]
+			
+			if ( msg.contains( "connection declined" )){
+				
+				perm_fail = true;
+			}
+			
 			synchronized( this ){
 				
 				if ( failed ){
@@ -2059,7 +2195,7 @@ TorProxyDHT
 				
 						// unexpected
 					
-					log( getName() + " failed: " + Debug.getNestedExceptionMessage(error));
+					log( getName() + " failed: " + msg );
 				}
 				
 				try{
@@ -2125,6 +2261,8 @@ TorProxyDHT
 		
 			throws Exception
 		{
+			super( false );
+			
 			target	= _target;
 			
 			GenericMessageEndpoint ep = msg_registration.createEndpoint( target );
@@ -2467,7 +2605,7 @@ TorProxyDHT
 			if ( type == MT_PROXY_ALLOC_OK_REPLY ){
 				
 				if ( getState() == STATE_INITIALISING ){
-					
+										
 					map = BDecoder.decodeStrings( map );
 					
 					remote_iid = (String)map.get( "iid" );
@@ -2481,6 +2619,15 @@ TorProxyDHT
 			}else if ( type == MT_PROXY_ALLOC_FAIL_REPLY ){
 				
 				map = BDecoder.decodeStrings( map );
+				
+				Number n_reason = (Number)map.get( "reason" );
+				
+				int reason = n_reason==null?FR_UNKNOWN:n_reason.intValue();
+				
+				if ( reason == FR_PROBE_FAILED ){
+					
+					proxy_client_consec_probe_fails.incrementAndGet();
+				}
 				
 				List<Map<String,Object>> contacts = (List<Map<String,Object>>)map.get( "contacts" );
 				
@@ -2707,7 +2854,7 @@ TorProxyDHT
 		extends OutboundConnection
 	{
 		final InboundConnectionProxy	for_connection;
-		final String					uid;
+		final String					remote_uid;
 		
 		protected volatile boolean	success;
 		
@@ -2715,14 +2862,14 @@ TorProxyDHT
 		OutboundConnectionProxyProbe(
 			InboundConnectionProxy	_for_connection,
 			InetSocketAddress		target,
-			String					_uid )
+			String					_remote_uid )
 		
 			throws Exception
 		{
 			super( target );
 			
 			for_connection	= _for_connection;
-			uid				= _uid;
+			remote_uid		= _remote_uid;
 			
 			setDisconnectAfterSeconds( 60 );
 		}
@@ -2746,7 +2893,7 @@ TorProxyDHT
 				
 				Map<String,Object> map = new HashMap<>();
 				
-				map.put( "uid", uid );
+				map.put( "uid", remote_uid );
 				map.put( "source_host", tep_mix.getHost());
 				
 				send( MT_PROXY_PROBE_REQUEST, map );
@@ -2790,8 +2937,11 @@ TorProxyDHT
 	{
 		private
 		InboundConnection(
-			GenericMessageConnection		gmc )
+			GenericMessageConnection		gmc,
+			boolean							do_stats )
 		{
+			super( do_stats );
+			
 			setConnection( gmc );
 			
 			setConnected();
@@ -2921,21 +3071,6 @@ TorProxyDHT
 			proxy.remoteRequestComplete( this );
 		}
 	}
-	
-	private final ByteArrayHashMap<Long>	dht_key_state = new ByteArrayHashMap<>();
-		
-	private final LinkedList<DHTRemoteRequest>[]		dht_remote_queued = new LinkedList[2];
-	private final ByteArrayHashMap<DHTRemoteRequest>[]	dht_remote_active = new ByteArrayHashMap[2];
-	
-	{
-		dht_remote_queued[0] = new LinkedList<>();
-		dht_remote_queued[1] = new LinkedList<>();
-		
-		dht_remote_active[0] = new ByteArrayHashMap<>();
-		dht_remote_active[1] = new ByteArrayHashMap<>();
-	}
-	
-	private final int[] DHT_REMOTE_MAX_ACTIVE_REQUESTS = { 16, 16 };
 
 	private void
 	printGlobalKeyState()
@@ -2951,7 +3086,7 @@ TorProxyDHT
 			log( str );
 			
 			ByteArrayHashMap<String>	type_map = new ByteArrayHashMap<>();
-							
+											
 			for ( DHTRemoteRequest req: dht_remote_active[0].values()){
 				
 				type_map.put( req.getMaskedKey(), ", get" );
@@ -2970,7 +3105,7 @@ TorProxyDHT
 
 				String age_str = "age=" + TimeFormatter.formatColon(elapsed/1000);
 					
-				String act_str = type_map.get( key );
+				String act_str = type_map.remove( key );
 				
 				if ( act_str == null ){
 					
@@ -2978,6 +3113,11 @@ TorProxyDHT
 				}
 
 				log( "    " + ByteFormatter.encodeString(key,0,Math.min(key.length,8)) + " -> " + age_str + act_str );
+			}
+			
+			if ( !type_map.isEmpty()){
+			
+				log( "    " + type_map.size() + " other requests for entries not in GKS" );
 			}
 		}
 	}
@@ -3163,7 +3303,7 @@ TorProxyDHT
 
 				active.remove( op_key );
 										
-				while( !queued.isEmpty()){
+				while( active.size() < DHT_REMOTE_MAX_ACTIVE_REQUESTS[ type ] && !queued.isEmpty()){
 					
 					try{
 						DHTRemoteRequest next = queued.removeFirst();
@@ -3735,6 +3875,8 @@ TorProxyDHT
 		private int			version;
 		private int			min_version;
 		
+		private String		remote_uid;
+		
 		private String		source_host;
 		private PublicKey 	source_pk;
 		
@@ -3761,7 +3903,7 @@ TorProxyDHT
 		InboundConnectionProxy(
 			GenericMessageConnection		gmc )
 		{
-			super( gmc );
+			super( gmc, true );
 		}
 			
 		@Override
@@ -3769,6 +3911,12 @@ TorProxyDHT
 		getName()
 		{
 			return( "Proxy in" );
+		}
+		
+		protected String
+		getRemoteUID()
+		{
+			return( remote_uid );
 		}
 		
 		protected void
@@ -3917,7 +4065,9 @@ TorProxyDHT
 				if ( denied ){
 					
 					Map<String,Object> reply = new HashMap<>();
-															
+							
+					reply.put( "reason", FR_DENIED );
+					
 					reply.put( "contacts", getBackupContacts());
 					
 					send( MT_PROXY_ALLOC_FAIL_REPLY, reply );
@@ -3930,7 +4080,8 @@ TorProxyDHT
 				}
 				
 				int		source_port	= ((Number)payload.get( "source_port" )).intValue();
-				String	uid			= (String)payload.get( "uid" );
+
+				remote_uid	= (String)payload.get( "uid" );
 				
 				source_pk = I2PHelperPlugin.TorEndpoint.getPublicKey( source_host );
 				
@@ -3945,7 +4096,7 @@ TorProxyDHT
 				
 				InetSocketAddress source_isa = InetSocketAddress.createUnresolved( source_host, source_port);
 				
-				new OutboundConnectionProxyProbe( this, source_isa, uid );
+				new OutboundConnectionProxyProbe( this, source_isa, remote_uid );
 				
 				setState( STATE_PROBE_SENT );
 				
@@ -4018,7 +4169,7 @@ TorProxyDHT
 		protected void
 		setProbeReplyReceived()
 		{
-			log( "Proxy server setup complete: iid=" + instance_id );
+			log( "Proxy server setup complete: uid=" + remote_uid );
 		
 			List<byte[]> saved_keys = null;
 			
@@ -4050,11 +4201,11 @@ TorProxyDHT
 
 			Map<String,Object> reply = new HashMap<>();
 				
-			reply.put( "iid", instance_id );
+			reply.put( "iid", my_instance_id );
 			
 			send( MT_PROXY_ALLOC_OK_REPLY, reply );
 			
-			proxyServerSetupComplete( this,instance_id );
+			proxyServerSetupComplete( this );
 		}
 		
 		protected void
@@ -4065,7 +4216,9 @@ TorProxyDHT
 			setState( STATE_PROBE_FAILED );
 			
 			Map<String,Object> reply = new HashMap<>();
-									
+			
+			reply.put( "reason", FR_PROBE_FAILED );
+			
 			reply.put( "contacts", getBackupContacts());
 			
 			send( MT_PROXY_ALLOC_FAIL_REPLY, reply );
@@ -4209,13 +4362,14 @@ TorProxyDHT
 		}
 		
 		protected void
-		checkRequests()
+		checkRequests(
+			boolean log )
 		{
 			List<ProxyRemoteRequestGet>	failed = new ArrayList<>();
 			
 			synchronized( remote_key_state ){
 				
-				if ( ENABLE_LOGGING ){
+				if ( ENABLE_LOGGING && log ){
 					
 					log( "RKS " + source_host + " size=" + remote_key_state.size() + 
 							", active=" + active_request_count[0] + "/" +active_request_count[1] + 
@@ -4305,7 +4459,7 @@ TorProxyDHT
 		InboundConnectionProbe(
 			GenericMessageConnection		gmc )
 		{
-			super( gmc );
+			super( gmc, false );
 		}
 			
 		@Override

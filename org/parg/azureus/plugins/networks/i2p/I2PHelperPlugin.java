@@ -4056,7 +4056,7 @@ I2PHelperPlugin
 					}
 					
 					plugin_maybe_null.tor_proxy_dht.proxyTrackerGet(
-						torrent_hash, false, 80,
+						torrent_hash, false, 80, 2*60*1000,
 						new TorProxyDHT.TorProxyDHTListener(){
 							
 							@Override
