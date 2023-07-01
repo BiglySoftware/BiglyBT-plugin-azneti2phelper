@@ -81,7 +81,7 @@ public class
 TorProxyDHT
 {
 	private static final boolean	LOOPBACK			= false;
-	private static final boolean	ENABLE_LOGGING		= true;
+	private static final boolean	ENABLE_LOGGING		= false;
 	
 	private static final boolean	ENABLE_PROXY_CLIENT = true;
 	private static final boolean	ENABLE_PROXY_SERVER = true;
@@ -371,26 +371,7 @@ TorProxyDHT
 								
 								if ( ENABLE_LOGGING ){
 									
-									printGlobalKeyState();
-									
-									printLocalKeyState();
-								
-									if ( is_minute ){
-										
-										OutboundConnectionProxy ccp = current_client_proxy;
-																				
-										log( "Connections=" + connections.size());
-										
-										if ( ccp != null ){
-											
-											log( "    " + ccp.getString());
-										}
-										
-										for ( InboundConnection sp: server_proxies ){
-											
-											log( "    " + sp.getString());
-										}
-									}
+									print( is_minute, false );
 								}
 								
 								for ( Connection con: connections ){
@@ -437,6 +418,41 @@ TorProxyDHT
 		}catch( Throwable e ){
 			
 			Debug.out( e );
+		}
+	}
+	
+	public void
+	print()
+	{
+		log( "Tor proxy DHT State:", true );
+		
+		print( true, true );
+	}
+	
+	private void
+	print(
+		boolean	do_connections,
+		boolean	explicit )
+	{
+		printGlobalKeyState( explicit );
+		
+		printLocalKeyState( explicit );
+	
+		if ( do_connections ){
+			
+			OutboundConnectionProxy ccp = current_client_proxy;
+													
+			log( "Connections=" + connections.size(), explicit );
+			
+			if ( ccp != null ){
+				
+				log( "    " + ccp.getString(), explicit );
+			}
+			
+			for ( InboundConnection sp: server_proxies ){
+				
+				log( "    " + sp.getString(), explicit );
+			}
 		}
 	}
 	
@@ -794,11 +810,12 @@ TorProxyDHT
 	private ByteArrayHashMap<LocalKeyState>	local_key_state = new ByteArrayHashMap<>();
 	
 	private void
-	printLocalKeyState()
+	printLocalKeyState(
+		boolean		explicit )
 	{
 		synchronized( proxy_requests ){
 			
-			log( "LKS size=" + local_key_state.size());
+			log( "LKS size=" + local_key_state.size(), explicit );
 			
 			long now = SystemTime.getCurrentTime();
 			
@@ -821,7 +838,7 @@ TorProxyDHT
 					", last=" +(lks.last_ok_request==null?"":lks.last_ok_request.getString()) +
 					age_str;
 						
-				log( "    " + ByteFormatter.encodeString(key,0,Math.min(key.length,8)) + " -> " + str );
+				log( "    " + ByteFormatter.encodeString(key,0,Math.min(key.length,8)) + " -> " + str, explicit );
 			}
 		}
 	}
@@ -1869,16 +1886,27 @@ TorProxyDHT
 			con.close();
 		}
 	}
-	
+
 	private void
 	log(
 		String		str )
 	{
-		if ( ENABLE_LOGGING ){
+		log( str, false );
+	}
+	
+	private void
+	log(
+		String		str,
+		boolean		explicit )
+	{
+		if ( ENABLE_LOGGING || explicit ){
 		
 			plugin.log( str );
 			
-			System.out.println( str );
+			if ( !explicit ){
+			
+				System.out.println( str );
+			}
 		}
 	}
 	
@@ -2533,12 +2561,21 @@ TorProxyDHT
 			
 				Iterator<ActiveRequest>	it = active_requests.values().iterator();
 				
+				if ( ENABLE_LOGGING && !active_requests.isEmpty()){
+					
+					log( "    Active requests: " + active_requests.size());
+				}
+				
 				while( it.hasNext()){
 					
 					ActiveRequest ar = it.next();
 					
 					ProxyLocalRequest request = ar.getProxyRequest();
-					
+
+					if ( ENABLE_LOGGING ){
+						log( "        " +  request.getString());
+					}
+										
 					if ( request.getType() == ProxyLocalRequest.RT_GET ){
 						
 						ProxyLocalRequestGet get = (ProxyLocalRequestGet)request;
@@ -3073,7 +3110,8 @@ TorProxyDHT
 	}
 
 	private void
-	printGlobalKeyState()
+	printGlobalKeyState(
+		boolean 	explicit )
 	{
 		long now = SystemTime.getCurrentTime();
 
@@ -3083,7 +3121,7 @@ TorProxyDHT
 					", active=" + dht_remote_active[0].size() + "/" + dht_remote_active[1].size() +
 					", queued=" + dht_remote_queued[0].size() + "/" + dht_remote_queued[1].size();
 			
-			log( str );
+			log( str, explicit );
 			
 			ByteArrayHashMap<String>	type_map = new ByteArrayHashMap<>();
 											
@@ -3112,12 +3150,12 @@ TorProxyDHT
 					act_str = "";
 				}
 
-				log( "    " + ByteFormatter.encodeString(key,0,Math.min(key.length,8)) + " -> " + age_str + act_str );
+				log( "    " + ByteFormatter.encodeString(key,0,Math.min(key.length,8)) + " -> " + age_str + act_str, explicit );
 			}
 			
 			if ( !type_map.isEmpty()){
 			
-				log( "    " + type_map.size() + " other requests for entries not in GKS" );
+				log( "    " + type_map.size() + " other requests for entries not in GKS", explicit );
 			}
 		}
 	}

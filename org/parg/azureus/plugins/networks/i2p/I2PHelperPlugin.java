@@ -4012,6 +4012,10 @@ I2PHelperPlugin
 
 					plugin_maybe_null.bridgePut( "Bridge Test", key, value, null );
 				
+				}else if ( cmd.equals( "tpd_print" )){
+
+					plugin_maybe_null.tor_proxy_dht.print();
+					
 				}else if ( cmd.equals( "tpd_put" )){
 
 					if ( bits.length != 2 ){
