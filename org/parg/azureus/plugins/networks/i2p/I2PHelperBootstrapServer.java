@@ -67,6 +67,8 @@ I2PHelperBootstrapServer
 		int					_port,
 		I2PHelperRouter		_router )
 	{
+			// note this is no longer used, replaced by i2pbootplugin
+		
 		router	= _router;
 		
 		try{

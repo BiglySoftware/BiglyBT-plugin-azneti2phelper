@@ -841,6 +841,26 @@ DHTI2P
 		}
 	}
 	
+	@Override
+	public void
+	checkBootstrap()
+	{
+		if ( bootstrap_node == null ){
+			
+			log( "No bootstrap node" );
+		}else{
+		
+			if ( transport.lookupDest( bootstrap_node )){
+			
+				log( "Bootstrap node lookup OK" );
+				
+			}else{
+				
+				log( "Bootstrap node lookup failed" );
+			}
+		}
+	}
+	
 	private void
 	checkForBootstrap()
 	{		

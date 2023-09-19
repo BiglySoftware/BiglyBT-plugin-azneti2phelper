@@ -476,6 +476,22 @@ I2PHelperDHTPluginInterface
 		return( dht.importContact( address ));
 	}
 	
+	public DHTPluginContact
+	importContact(
+		InetSocketAddress				address,
+		byte							version,
+		int								preferred_net )
+	{
+		if ( dht == null ){
+			
+			Debug.out( "DHT not yet available" );
+		
+			return( null );
+		}
+		
+		return( dht.importContact( address ));
+	}
+	
 	@Override
 	public void
 	get(

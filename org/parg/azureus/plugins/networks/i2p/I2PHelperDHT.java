@@ -142,6 +142,9 @@ I2PHelperDHT
 	public void
 	requestBootstrap();
 	
+	public void
+	checkBootstrap();
+	
 	/**
 	 * Used by the bootstrap server
 	 * @param number

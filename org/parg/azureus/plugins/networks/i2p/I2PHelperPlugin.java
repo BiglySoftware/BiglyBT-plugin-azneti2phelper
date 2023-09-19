@@ -392,7 +392,7 @@ I2PHelperPlugin
 		System.setProperty( "I2P_DISABLE_OUTPUT_OVERRIDE", "1" );
 	}
 	
-	private static final String	BOOTSTRAP_SERVER = "http://i2pboot.vuze.com:60000/?getNodes=true";
+	private static final String	BOOTSTRAP_SERVER = "http://i2pboot.biglybt.com:60000/?getNodes=true";
 	
 	private PluginInterface			plugin_interface;
 	private TorrentAttribute		ta_networks;
@@ -465,7 +465,8 @@ I2PHelperPlugin
 	private I2PHelperAltNetHandlerTor		alt_network_handler_tor;
 	
 	private TorProxyDHT						tor_proxy_dht;
-	
+	private final AESemaphore				tor_proxy_endpoints_init_sem = new AESemaphore( "I2P:torproxyinit" );
+
 	private I2PHelperNetworkMixer		network_mixer;
 	
 	private MagnetURIHandlerListener	magnet_handler =
@@ -2109,8 +2110,10 @@ I2PHelperPlugin
 			}
 		}finally{
 			
+			tor_proxy_endpoints_init_sem.releaseForever();
+
 			tor_proxy_dht.initialise();
-			
+						
 			if ( !status_set ){
 			
 				tor_address_param.setValue( MessageText.getString( "azi2phelper.tor.disabled" ));
@@ -3962,6 +3965,10 @@ I2PHelperPlugin
 					
 					dht.requestBootstrap();
 					
+				}else if ( cmd.equals( "bootcheck" )){
+					
+					dht.checkBootstrap();
+					
 				}else if ( cmd.equals( "boottest" )){
 					
 					List<NodeInfo> nodes = dht.getNodesForBootstrap(8);
@@ -5190,6 +5197,11 @@ I2PHelperPlugin
 	
 		throws IPCException
 	{		
+		if ( plugin_enabled && !tor_proxy_endpoints_init_sem.reserve( 10*1000 )){
+			
+			Debug.out( "Tor proxy init sem timeout" );
+		}
+		
 		String net = AENetworkClassifier.categoriseAddress( host );
 		
 		int	explicit_net = 0;	// LA_EXPLICIT_NET_NONE
