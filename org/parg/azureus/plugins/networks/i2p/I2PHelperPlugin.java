@@ -40,6 +40,8 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
@@ -59,6 +61,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 
 import net.i2p.client.streaming.I2PSocket;
+import net.i2p.crypto.eddsa.EdDSAEngine;
 import net.i2p.crypto.eddsa.EdDSAPrivateKey;
 import net.i2p.crypto.eddsa.EdDSAPublicKey;
 import net.i2p.data.Base32;
@@ -6837,7 +6840,7 @@ outer:
 			byte[]			sig )
 		{
 			try{
-				Signature signature = Signature.getInstance( "SHA512withEdDSA", "I2P");
+				Signature signature = getEdDSASignature();
 				
 				signature.initVerify( pk );
 				
@@ -6898,8 +6901,8 @@ outer:
 						throw( new Exception( "host pk mismatch" ));
 					}
 				
-					Signature signature = Signature.getInstance( "SHA512withEdDSA", "I2P");
-				   			
+					Signature signature = getEdDSASignature();
+				   								
 		            public_key = new EdDSAPublicKey( pk );
 	
 	                private_key = new EdDSAPrivateKey( sk );
@@ -6916,8 +6919,8 @@ outer:
 					signature.update( TEST_STRING.getBytes());
 					
 					byte[] sig_bytes = signature.sign();
-					
-					signature = Signature.getInstance( "SHA512withEdDSA", "I2P");
+										
+					signature = getEdDSASignature();
 					
 					signature.initVerify( public_key );
 					
@@ -6937,6 +6940,22 @@ outer:
 					public_key	= null;
 					private_key	= null;
 				}
+			}
+		}
+		
+		private static Signature
+		getEdDSASignature()
+		
+			throws NoSuchAlgorithmException
+		{
+			try{
+				return( Signature.getInstance( "SHA512withEdDSA", "I2P"));
+   			
+			}catch( Throwable e ){
+			
+					// seems the above fails on OSX in Eclipse at least
+				
+				return( new EdDSAEngine( MessageDigest.getInstance( "SHA-512" )));
 			}
 		}
 		
@@ -6962,7 +6981,7 @@ outer:
 		
 			throws Exception
 		{
-			Signature signature = Signature.getInstance( "SHA512withEdDSA", "I2P");
+			Signature signature = getEdDSASignature();
    			            
             signature.initSign( private_key );
 						
