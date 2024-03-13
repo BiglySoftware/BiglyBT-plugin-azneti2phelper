@@ -144,9 +144,9 @@ I2PHelperMessageHandler
 		final InetSocketAddress address = connection.getEndpoint().getNotionalAddress();
 		
 		if ( address.isUnresolved()){
-			
+		
 			final String peer_host = address.getHostName();
-			
+
 			if ( peer_host.endsWith( ".i2p" )){
 				
 				final OutgoingMessageQueue out_queue = connection.getOutgoingMessageQueue();
@@ -172,7 +172,7 @@ I2PHelperMessageHandler
 						
 						@Override
 						public boolean messageAdded(Message message) {
-							
+														
 							if ( message instanceof BTHandshake ){
 							
 								BTHandshake	bt_handshake = (BTHandshake)message;
@@ -185,6 +185,8 @@ I2PHelperMessageHandler
 									// deterministically switch peer-id (factor in dht network in case we switch nets)
 								
 								byte[] peer_id = bt_handshake.getPeerId();
+								
+								peer_id = peer_id.clone();
 								
 								for ( int i=0;i<peer_id_mask.length;i++){
 									
@@ -201,6 +203,9 @@ I2PHelperMessageHandler
 									
 									peer_id[i] = sha1[i];
 								}
+								
+								bt_handshake.setPeerId( peer_id );
+								
 							}else if ( message instanceof LTHandshake ){
 								
 								LTHandshake lt_handshake = (LTHandshake)message;
@@ -466,6 +471,8 @@ I2PHelperMessageHandler
 								
 								byte[] peer_id = bt_handshake.getPeerId();
 								
+								peer_id = peer_id.clone();
+								
 								for ( int i=0;i<peer_id_mask.length;i++){
 									
 									peer_id[i+8] ^= peer_id_mask[i];
@@ -481,6 +488,8 @@ I2PHelperMessageHandler
 									
 									peer_id[i] = sha1[i];
 								}
+								
+								bt_handshake.setPeerId( peer_id );
 							}
 							
 							return true;

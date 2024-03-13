@@ -2115,7 +2115,10 @@ I2PHelperPlugin
 			
 			tor_proxy_endpoints_init_sem.releaseForever();
 
-			tor_proxy_dht.initialise();
+			if ( tor_proxy_dht != null ){
+			
+				tor_proxy_dht.initialise();
+			}
 						
 			if ( !status_set ){
 			

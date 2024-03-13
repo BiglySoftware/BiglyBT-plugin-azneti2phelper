@@ -185,13 +185,13 @@ I2PSMHolder
 										try{
 											rep_sm = createSocketManager( true );
 											
-											System.out.println( "Created socket manager for " + getName());
+												// System.out.println( "Created socket manager for " + getName());
 											
 											I2PSession	rep_session = getSession( rep_sm );
 											
 											if ( rep_session != null ){
 												
-												System.out.println( "Got session for " + getName());
+													// System.out.println( "Got session for " + getName());
 												
 												synchronized( I2PSMHolder.this ){
 													
