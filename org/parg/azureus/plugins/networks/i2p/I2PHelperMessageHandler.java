@@ -193,8 +193,10 @@ I2PHelperMessageHandler
 									peer_id[i+8] ^= peer_id_mask[i];
 								}
 								
+								peer_id[17]++;	// i2p specific 
+
 								byte	dht_index = (byte)plugin.selectDHTIndex( bt_handshake.getDataHash());
-								
+																
 								peer_id[19] += dht_index;
 								
 								byte[] sha1 = new SHA1Simple().calculateHash( peer_id );
@@ -478,8 +480,10 @@ I2PHelperMessageHandler
 									peer_id[i+8] ^= peer_id_mask[i];
 								}
 								
+								peer_id[18]++;	// tor specific
+
 								byte	dht_index = (byte)plugin.selectDHTIndex( bt_handshake.getDataHash());
-								
+																
 								peer_id[19] += dht_index;
 								
 								byte[] sha1 = new SHA1Simple().calculateHash( peer_id );

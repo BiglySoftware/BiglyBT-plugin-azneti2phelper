@@ -3264,7 +3264,7 @@ I2PHelperPlugin
 			
 			pc.setPluginParameter( "plugin.info", plugin_info );
 		
-			COConfigurationManager.save();
+			// COConfigurationManager.save();
 		}
 	}
 	
