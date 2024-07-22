@@ -1174,7 +1174,9 @@ I2PDHTTrackerPlugin
 
 				if ( registration == null ){
 					
-					Debug.out( "Inconsistent, registration should be non-null" );
+						// this can happen since we rate-limited the put operations
+
+					// Debug.out( "Inconsistent, registration should be non-null" );
 					
 					continue;
 				}
