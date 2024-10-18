@@ -6276,7 +6276,10 @@ I2PHelperPlugin
 					tep.destroy();
 				}
 				
-				tor_proxy_dht.destroy();
+				if ( tor_proxy_dht != null ){
+				
+					tor_proxy_dht.destroy();
+				}
 				
 				removeParameterListeners();
 			}
