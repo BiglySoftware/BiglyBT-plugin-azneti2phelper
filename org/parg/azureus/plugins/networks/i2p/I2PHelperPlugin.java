@@ -50,6 +50,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -1556,6 +1557,38 @@ I2PHelperPlugin
 									String stats = "HTTP Proxy requests=" + http_proxy_request_count.get() + ", ok=" + http_proxy_request_ok.get() + ", failed=" + http_proxy_request_failed.get();
 	
 									log( stats );
+								}
+								
+								synchronized( I2PHelperPlugin.this ){
+									
+									if ( proxy_map.size() > 0 ){
+										
+										long now = SystemTime.getMonotonousTime();
+										
+										Iterator<ProxyMapEntry>	it = proxy_map.values().iterator();
+										
+										while( it.hasNext()){
+											
+											ProxyMapEntry entry = it.next();
+											
+											if ( now - entry.getCreateTime() > 10*60*1000 ){
+												
+												it.remove();
+												
+												String	intermediate	= entry.getIntermediateHost();
+												
+												if ( intermediate != null ){
+													
+													if ( socks_proxy != null ){
+														
+														socks_proxy.removeIntermediateHost( intermediate );
+													}
+												}
+												
+												Debug.out( "Removed orphaned proxy entry for " + entry.getHost() + ", " +entry.getCreator());
+											}
+										}
+									}
 								}
 								
 								if ( tick_count % 2 == 0 ){
@@ -5396,8 +5429,7 @@ I2PHelperPlugin
 			return( null );
 		}
 						
-		//System.out.println( "getProxy: " + reason + "/" + url + ", opt=" + getOptionsString( proxy_options ));
-
+		// System.out.println( "getProxy: " + reason + "/" + url + ", opt=" + getOptionsString( proxy_options ));
 		
 		synchronized( this ){
 			
@@ -6346,26 +6378,26 @@ I2PHelperPlugin
 		}
 	}
 	
-//	private String
-//	getOptionsString(
-//		Map<String,Object>	opts )
-//	{
-//		String[] nets = (String[])opts.get( "peer_networks" );
-//		
-//		if ( nets != null ){
-//			
-//			String str = "";
-//			
-//			for ( String net: nets ){
-//				
-//				str += (str.length()==0?"":",") + net;
-//			}
-//			
-//			return( "peer_networks=" + str );
-//		}
-//		
-//		return( "" );
-//	}
+	private String
+	getOptionsString(
+		Map<String,Object>	opts )
+	{
+		String[] nets = (String[])opts.get( "peer_networks" );
+		
+		if ( nets != null ){
+			
+			String str = "";
+			
+			for ( String net: nets ){
+				
+				str += (str.length()==0?"":",") + net;
+			}
+			
+			return( "peer_networks=" + str );
+		}
+		
+		return( "" );
+	}
 
 	private boolean
 	testPort(
@@ -6428,12 +6460,14 @@ outer:
 	private class
 	ProxyMapEntry
 	{
-		private long	created = SystemTime.getMonotonousTime();
+		private final long	created = SystemTime.getMonotonousTime();
 		
-		private	String				host;
-		private String				intermediate_host;
-		private Map<String,Object>	output;
+		private	final String				host;
+		private final String				intermediate_host;
+		private final Map<String,Object>	output;
 
+		private final String				creator;
+		
 		private
 		ProxyMapEntry(
 			String				_host,
@@ -6443,12 +6477,39 @@ outer:
 			host				= _host;
 			intermediate_host	= _intermediate_host;
 			output				= _output;
+			
+			if ( Constants.isCVSVersion()){
+				
+				creator = Debug.getCompressedStackTrace();
+				
+			}else{
+				
+				creator = "Unknown";
+			}
+		}
+		
+		private String
+		getHost()
+		{
+			return( host );
 		}
 		
 		private String
 		getIntermediateHost()
 		{
 			return( intermediate_host );
+		}
+		
+		private long
+		getCreateTime()
+		{
+			return( created );
+		}
+		
+		private String
+		getCreator()
+		{
+			return( creator );
 		}
 	}
 	

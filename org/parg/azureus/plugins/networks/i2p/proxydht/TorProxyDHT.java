@@ -4001,14 +4001,17 @@ TorProxyDHT
 						
 						InetSocketAddress isa = net.getNotionalAddress( contact );
 						
-						m.put( "host", AddressUtils.getHostAddress( isa ));
-						m.put( "port", isa.getPort());
-						
-						l_contacts.add( m );								
-						
-						if ( l_contacts.size() == 5 ){
+						if ( isa != null ){
 							
-							break;
+							m.put( "host", AddressUtils.getHostAddress( isa ));
+							m.put( "port", isa.getPort());
+							
+							l_contacts.add( m );								
+							
+							if ( l_contacts.size() == 5 ){
+								
+								break;
+							}
 						}
 					}
 				}

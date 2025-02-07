@@ -475,7 +475,7 @@ DHTAZ
 	log(
 		String	str )
 	{
-		adapter.log( str );
+		adapter.log( base.getDHTIndex() + "_az: " + str );
 	}
 		
 	@Override
@@ -483,7 +483,7 @@ DHTAZ
 	log(
 		Throwable	e )
 	{
-		adapter.log( Debug.getNestedExceptionMessage(e));
+		adapter.log( base.getDHTIndex() + "_az: " + Debug.getNestedExceptionMessage(e));
 	}
 	
 	@Override
@@ -492,7 +492,7 @@ DHTAZ
 		int		log_type,
 		String	str )
 	{
-		adapter.log( str );
+		adapter.log( base.getDHTIndex() + "_az: " + str );
 	}
 	
 	@Override

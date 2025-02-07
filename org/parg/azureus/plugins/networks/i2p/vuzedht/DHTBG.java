@@ -22,7 +22,6 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -69,6 +68,7 @@ public class
 DHTBG
 	implements DHTLogger
 {
+	private final DHTI2P					i2p_dht;
 	private final I2PHelperAdapter			adapter;
 	
 	private final boolean					enable_alt_contacts;
@@ -92,13 +92,14 @@ DHTBG
 		DHTI2P				_i2p_dht,
 		DHTTransportAZ		_az_transport,
 		I2PHelperAdapter	_adapter )
-	{		
+	{	
+		i2p_dht			= _i2p_dht;
 		az_transport	= _az_transport;
 		adapter			= _adapter;
 		
-		int dht_index  = _i2p_dht.getDHTIndex();
+		int dht_index  = i2p_dht.getDHTIndex();
 		
-		File storage_dir = new File( _i2p_dht.getDir(), "dhtdata_bg" + (dht_index==0?"":String.valueOf(dht_index)));
+		File storage_dir = new File( i2p_dht.getDir(), "dhtdata_bg" + (dht_index==0?"":String.valueOf(dht_index)));
 		
 		if ( !storage_dir.isDirectory()){
 		
@@ -333,7 +334,7 @@ DHTBG
 	log(
 		String	str )
 	{
-		adapter.log( str );
+		adapter.log( i2p_dht.getDHTIndex() + "_bg: " + str );
 	}
 		
 	@Override
@@ -341,7 +342,7 @@ DHTBG
 	log(
 		Throwable	e )
 	{
-		adapter.log( Debug.getNestedExceptionMessage(e));
+		adapter.log( i2p_dht.getDHTIndex() + "_bg: " + Debug.getNestedExceptionMessage(e));
 	}
 	
 	@Override
@@ -350,7 +351,7 @@ DHTBG
 		int		log_type,
 		String	str )
 	{
-		adapter.log( str );
+		adapter.log( i2p_dht.getDHTIndex() + "_bg: " + str );
 	}
 	
 	@Override

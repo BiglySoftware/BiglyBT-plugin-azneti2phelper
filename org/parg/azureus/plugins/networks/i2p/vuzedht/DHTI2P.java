@@ -255,7 +255,7 @@ DHTI2P
 	log(
 		String	str )
 	{
-		adapter.log( str );
+		adapter.log( dht_index + ": " + str );
 	}
 		
 	@Override
@@ -263,7 +263,7 @@ DHTI2P
 	log(
 		Throwable	e )
 	{
-		adapter.log( Debug.getNestedExceptionMessage(e));
+		adapter.log( dht_index + ": " + Debug.getNestedExceptionMessage(e));
 	}
 	
 	@Override
@@ -272,7 +272,7 @@ DHTI2P
 		int		log_type,
 		String	str )
 	{
-		adapter.log( str );
+		adapter.log( dht_index + ": " + str );
 	}
 	
 	@Override

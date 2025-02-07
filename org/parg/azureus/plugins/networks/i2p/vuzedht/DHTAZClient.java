@@ -62,8 +62,6 @@ import com.biglybt.core.dht.transport.DHTTransportStoreReply;
 import com.biglybt.core.dht.transport.DHTTransportValue;
 import com.biglybt.plugin.dht.DHTPluginContact;
 
-import net.i2p.I2PAppContext;
-import net.i2p.client.I2PSession;
 import net.i2p.data.Destination;
 
 public class 

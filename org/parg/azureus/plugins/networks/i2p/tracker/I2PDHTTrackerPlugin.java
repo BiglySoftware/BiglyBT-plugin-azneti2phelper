@@ -3061,7 +3061,7 @@ I2PDHTTrackerPlugin
 		Torrent			torrent,
 		String			str )
 	{
-		adapter.log( torrent.getName() + ": " + str );
+		adapter.log( "\""+ torrent.getName() + "\": " + str );
 	}
 	
 

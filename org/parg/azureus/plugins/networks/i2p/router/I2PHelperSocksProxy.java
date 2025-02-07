@@ -39,6 +39,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -108,7 +110,20 @@ I2PHelperSocksProxy
 	
 	private AESocksProxy 		proxy;
 	
-	private Map<String,Object[]>	intermediate_host_map	= new HashMap<String, Object[]>();
+	private Map<String,Object[]>	intermediate_host_map		= new HashMap<String, Object[]>();
+
+	protected Map<String,Object[]>	intermediate_host_old_map =
+		new LinkedHashMap<String,Object[]>(256,0.75f,true)
+		{
+			@Override
+			protected boolean
+			removeEldestEntry(
+		   		Map.Entry<String,Object[]> eldest)
+			{
+				return size() > 256;
+			}
+		};
+	
 	private int						next_intermediate_host	= 1;
 	
 	private boolean				destroyed;
@@ -154,6 +169,8 @@ I2PHelperSocksProxy
 		
 		throws AEProxyException
 	{
+		long now =  SystemTime.getMonotonousTime() ;
+		
 		synchronized( this ){
 			
 			if ( destroyed ){
@@ -174,7 +191,29 @@ I2PHelperSocksProxy
 				
 				if ( !intermediate_host_map.containsKey( intermediate_host )){
 					
-					intermediate_host_map.put( intermediate_host, new Object[]{ host, opts, output });
+					Object[] entry = new Object[]{ host, opts, output, now};
+					
+					intermediate_host_map.put( intermediate_host, entry );
+					
+					if ( intermediate_host_old_map.size() > 16 ){
+						
+						try{
+							Iterator<Object[]> it = intermediate_host_old_map.values().iterator();
+							
+							while( it.hasNext()){
+								
+								if ( now - (Long)it.next()[3] > 2*60*1000 ){
+									
+									it.remove();
+								}
+							}
+						}catch( Throwable e ){
+							
+							Debug.out( e );
+						}
+					}
+					
+					intermediate_host_old_map.put( intermediate_host, entry );
 					
 					return( intermediate_host );
 				}
@@ -189,6 +228,8 @@ I2PHelperSocksProxy
 		synchronized( this ){
 			
 			intermediate_host_map.remove( intermediate );
+			
+			intermediate_host_old_map.remove( intermediate );
 		}
 	}
 	
@@ -472,9 +513,20 @@ I2PHelperSocksProxy
 							
 			if ( resolved != null ){
 				
+				String ha = resolved.getHostAddress();
+				
 				synchronized( this ){
 					
-					Object[]	intermediate = intermediate_host_map.remove( resolved.getHostAddress());
+					Object[]	intermediate = intermediate_host_map.remove( ha );
+					
+					if ( intermediate == null ){
+						
+							// allow limited re-use of an address
+							// of use, for example, when an HTTP URL connection needs to
+							// be authenticated
+						
+						intermediate = intermediate_host_old_map.get( ha );
+					}
 					
 					if ( intermediate != null ){
 						
