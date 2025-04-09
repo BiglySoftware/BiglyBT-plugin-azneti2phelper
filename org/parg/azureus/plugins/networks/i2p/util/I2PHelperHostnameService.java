@@ -144,7 +144,7 @@ I2PHelperHostnameService
 	{
 		String hostname = _hostname.toLowerCase( Locale.US );
 		
-		if ( !hostname.endsWith( ".i2p" )){
+		if ( AENetworkClassifier.categoriseAddress( hostname ) != AENetworkClassifier.AT_I2P ){
 			
 			return( null );
 		}
@@ -376,15 +376,24 @@ I2PHelperHostnameService
 			dest_str = dest_str.replace('/', '~');
 			dest_str = dest_str.replace('+', '-');
 			
-			if ( host.endsWith( ".i2p" )){
+			String host_prefix = null;
+			
+			if (  host.endsWith( ".i2p" )){
 				
-				host = host.substring( 0, host.length() - 4 );
+				host_prefix = host.substring( 0, host.length() - 4 );
+				
+			}else if ( host.endsWith( ".i2p.alt" )){
+				
+				host_prefix = host.substring( 0, host.length() - 8 );
+			}
+			
+			if ( host_prefix != null ){
 				
 				synchronized( this ){
 					
 					Map<String,String> cache = loadDNSFeedCache();
 					
-					String existing = cache.get( host );
+					String existing = cache.get( host_prefix );
 					
 					if ( existing != null && existing.equals( dest_str )){
 						
@@ -393,13 +402,13 @@ I2PHelperHostnameService
 						
 					PrintWriter pw = new PrintWriter( new OutputStreamWriter( new FileOutputStream( dnsfeed_file.getAbsolutePath(), true ), "UTF-8" ));
 						
-					pw.println( host + "=" + dest_str );
+					pw.println( host_prefix + "=" + dest_str );
 						
 					pw.close();
 						
-					cache.put( host, dest_str );
+					cache.put( host_prefix, dest_str );
 					
-					result_cache.put( host, dest_str );
+					result_cache.put( host_prefix, dest_str );
 				}
 			}
 			
@@ -549,10 +558,19 @@ I2PHelperHostnameService
 					
 					String 	host = bits[0].trim();
 					
-					if ( host.endsWith( ".i2p" )){
+					String host_prefix = null;
+					
+					if (  host.endsWith( ".i2p" )){
 						
-						host = host.substring( 0, host.length()-4 );
+						host_prefix = host.substring( 0, host.length() - 4 );
 						
+					}else if ( host.endsWith( ".i2p.alt" )){
+						
+						host_prefix = host.substring( 0, host.length() - 8 );
+					}
+					
+					if ( host_prefix != null ){
+												
 						try{
 							Destination dest = new Destination();
 							
@@ -560,9 +578,9 @@ I2PHelperHostnameService
 							
 							String b32 = Base32.encode( dest.calculateHash().getData());
 							
-							if ( host_map.put( host, b32 ) != null ){
+							if ( host_map.put( host_prefix, b32 ) != null ){
 								
-								System.out.println( "host updated: " + host );
+								System.out.println( "host updated: " + host_prefix );
 								
 							}else{
 								
@@ -572,7 +590,7 @@ I2PHelperHostnameService
 							
 						}catch( Throwable e ){
 							
-							System.out.println( "Bad base64 for " + host );
+							System.out.println( "Bad base64 for " + host_prefix );
 							
 						}
 					}else{

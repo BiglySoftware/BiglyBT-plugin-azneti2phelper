@@ -95,6 +95,8 @@ I2PHelperRouter
 	
 	public static final int 	MAX_HOPS 	= 7;
 	public static final int 	MAX_TUNNELS = 16;
+	public static final int 	MIN_VAR		= -3;
+	public static final int 	MAX_VAR		= 3;
 	
 		// mix defaults
 	
@@ -107,11 +109,17 @@ I2PHelperRouter
 	public static final String	PARAM_MIX_INBOUND_QUANTITY			= "azi2phelper.mix.inbound.quantity";
 	public static final int		PARAM_MIX_INBOUND_QUANTITY_DEFAULT	= 2;
 	
+	public static final String	PARAM_MIX_INBOUND_VAR				= "azi2phelper.mix.inbound.var";
+	public static final int		PARAM_MIX_INBOUND_VAR_DEFAULT		= 0;
+
 	public static final String	PARAM_MIX_OUTBOUND_HOPS				= "azi2phelper.mix.outbound.hops";
 	public static final int		PARAM_MIX_OUTBOUND_HOPS_DEFAULT		= 1;	
 
 	public static final String	PARAM_MIX_OUTBOUND_QUANTITY			= "azi2phelper.mix.outbound.quantity";
 	public static final int		PARAM_MIX_OUTBOUND_QUANTITY_DEFAULT	= 2;
+
+	public static final String	PARAM_MIX_OUTBOUND_VAR				= "azi2phelper.mix.outbound.var";
+	public static final int		PARAM_MIX_OUTBOUND_VAR_DEFAULT		= 0;
 
 		// i2p only defaults
 	
@@ -124,12 +132,18 @@ I2PHelperRouter
 	public static final String	PARAM_PURE_INBOUND_QUANTITY				= "azi2phelper.i2p.inbound.quantity";
 	public static final int		PARAM_PURE_INBOUND_QUANTITY_DEFAULT		= 2;
 	
+	public static final String	PARAM_PURE_INBOUND_VAR					= "azi2phelper.i2p.inbound.var";
+	public static final int		PARAM_PURE_INBOUND_VAR_DEFAULT			= 0;
+
 	public static final String	PARAM_PURE_OUTBOUND_HOPS				= "azi2phelper.i2p.outbound.hops";
 	public static final int		PARAM_PURE_OUTBOUND_HOPS_DEFAULT		= 3;	
 
 	public static final String	PARAM_PURE_OUTBOUND_QUANTITY			= "azi2phelper.i2p.outbound.quantity";
 	public static final int		PARAM_PURE_OUTBOUND_QUANTITY_DEFAULT	= 2;
-	
+
+	public static final String	PARAM_PURE_OUTBOUND_VAR					= "azi2phelper.i2p.outbound.var";
+	public static final int		PARAM_PURE_OUTBOUND_VAR_DEFAULT			= 0;
+
 		// other defaults
 	
 	public static final String	PARAM_OTHER_ENABLED					= "azi2phelper.other.enabled";
@@ -140,13 +154,19 @@ I2PHelperRouter
 	
 	public static final String	PARAM_OTHER_INBOUND_QUANTITY			= "azi2phelper.other.inbound.quantity";
 	public static final int		PARAM_OTHER_INBOUND_QUANTITY_DEFAULT	= 2;
-	
+
+	public static final String	PARAM_OTHER_INBOUND_VAR					= "azi2phelper.other.inbound.var";
+	public static final int		PARAM_OTHER_INBOUND_VAR_DEFAULT			= 0;
+
 	public static final String	PARAM_OTHER_OUTBOUND_HOPS				= "azi2phelper.other.outbound.hops";
 	public static final int		PARAM_OTHER_OUTBOUND_HOPS_DEFAULT		= 3;	
 
 	public static final String	PARAM_OTHER_OUTBOUND_QUANTITY			= "azi2phelper.other.outbound.quantity";
 	public static final int		PARAM_OTHER_OUTBOUND_QUANTITY_DEFAULT	= 2;
-	
+
+	public static final String	PARAM_OTHER_OUTBOUND_VAR				= "azi2phelper.other.outbound.var";
+	public static final int		PARAM_OTHER_OUTBOUND_VAR_DEFAULT		= 0;
+
 	public static final int		DHT_MIX			= 0;
 	public static final int		DHT_NON_MIX		= 1;
 	
@@ -278,6 +298,10 @@ I2PHelperRouter
 			
 			def = PARAM_MIX_INBOUND_QUANTITY_DEFAULT;
 			
+		}else if ( name == PARAM_MIX_INBOUND_VAR ){
+			
+			def = PARAM_MIX_INBOUND_VAR_DEFAULT;
+			
 		}else if ( name == PARAM_MIX_OUTBOUND_HOPS ){
 			
 			def = PARAM_MIX_OUTBOUND_HOPS_DEFAULT;
@@ -285,6 +309,10 @@ I2PHelperRouter
 		}else if ( name == PARAM_MIX_OUTBOUND_QUANTITY ){
 			
 			def = PARAM_MIX_OUTBOUND_QUANTITY_DEFAULT;
+			
+		}else if ( name == PARAM_MIX_OUTBOUND_VAR ){
+			
+			def = PARAM_MIX_OUTBOUND_VAR_DEFAULT;
 			
 			// i2p
 			
@@ -296,6 +324,10 @@ I2PHelperRouter
 			
 			def = PARAM_PURE_INBOUND_QUANTITY_DEFAULT;
 			
+		}else if ( name == PARAM_PURE_INBOUND_VAR ){
+			
+			def = PARAM_PURE_INBOUND_VAR_DEFAULT;
+			
 		}else if ( name == PARAM_PURE_OUTBOUND_HOPS ){
 			
 			def = PARAM_PURE_OUTBOUND_HOPS_DEFAULT;
@@ -304,8 +336,12 @@ I2PHelperRouter
 			
 			def = PARAM_PURE_OUTBOUND_QUANTITY_DEFAULT;
 			
+		}else if ( name == PARAM_PURE_OUTBOUND_VAR ){
 			
+			def = PARAM_PURE_OUTBOUND_VAR_DEFAULT;
+					
 			// other
+			
 		}else if ( name == PARAM_OTHER_INBOUND_HOPS ){
 			
 			def = PARAM_OTHER_INBOUND_HOPS_DEFAULT;
@@ -314,6 +350,10 @@ I2PHelperRouter
 			
 			def = PARAM_OTHER_INBOUND_QUANTITY_DEFAULT;
 			
+		}else if ( name == PARAM_OTHER_INBOUND_VAR ){
+			
+			def = PARAM_OTHER_INBOUND_VAR_DEFAULT;
+			
 		}else if ( name == PARAM_OTHER_OUTBOUND_HOPS ){
 			
 			def = PARAM_OTHER_OUTBOUND_HOPS_DEFAULT;
@@ -321,6 +361,10 @@ I2PHelperRouter
 		}else if ( name == PARAM_OTHER_OUTBOUND_QUANTITY ){
 			
 			def = PARAM_OTHER_OUTBOUND_QUANTITY_DEFAULT;
+					
+		}else if ( name == PARAM_OTHER_OUTBOUND_VAR ){
+			
+			def = PARAM_OTHER_OUTBOUND_VAR_DEFAULT;
 					
 		}else{
 			
@@ -631,8 +675,10 @@ I2PHelperRouter
         	
 	        opts.setProperty( "inbound.length", getIntegerParameterAsString( PARAM_MIX_INBOUND_HOPS ));
 	        opts.setProperty( "inbound.quantity", getIntegerParameterAsString( PARAM_MIX_INBOUND_QUANTITY )); 	
+	        opts.setProperty( "inbound.lengthVariance", getIntegerParameterAsString( PARAM_MIX_INBOUND_VAR )); 	
 	        opts.setProperty( "outbound.length", getIntegerParameterAsString( PARAM_MIX_OUTBOUND_HOPS )); 
 	        opts.setProperty( "outbound.quantity",  getIntegerParameterAsString( PARAM_MIX_OUTBOUND_QUANTITY ));
+	        opts.setProperty( "outbound.lengthVariance",  getIntegerParameterAsString( PARAM_MIX_OUTBOUND_VAR ));
 	        
         }else if ( sm_type == SM_TYPE_PURE ){
         	
@@ -643,8 +689,10 @@ I2PHelperRouter
        	
 	        opts.setProperty( "inbound.length", getIntegerParameterAsString( PARAM_PURE_INBOUND_HOPS ));	        
 	        opts.setProperty( "inbound.quantity", getIntegerParameterAsString( PARAM_PURE_INBOUND_QUANTITY )); 	
+	        opts.setProperty( "inbound.lengthVariance", getIntegerParameterAsString( PARAM_PURE_INBOUND_VAR )); 	
 	        opts.setProperty( "outbound.length", getIntegerParameterAsString( PARAM_PURE_OUTBOUND_HOPS )); 
 	        opts.setProperty( "outbound.quantity",  getIntegerParameterAsString( PARAM_PURE_OUTBOUND_QUANTITY ));
+	        opts.setProperty( "outbound.lengthVariance",  getIntegerParameterAsString( PARAM_PURE_OUTBOUND_VAR ));
 	
         }else{
         	
@@ -655,8 +703,10 @@ I2PHelperRouter
        	
 	        opts.setProperty( "inbound.length", getIntegerParameterAsString( PARAM_OTHER_INBOUND_HOPS ));
 	        opts.setProperty( "inbound.quantity", getIntegerParameterAsString( PARAM_OTHER_INBOUND_QUANTITY )); 	
+	        opts.setProperty( "inbound.lengthVariance", getIntegerParameterAsString( PARAM_OTHER_INBOUND_VAR )); 	
 	        opts.setProperty( "outbound.length", getIntegerParameterAsString( PARAM_OTHER_OUTBOUND_HOPS )); 
 	        opts.setProperty( "outbound.quantity",  getIntegerParameterAsString( PARAM_OTHER_OUTBOUND_QUANTITY ));
+	        opts.setProperty( "outbound.lengthVariance",  getIntegerParameterAsString( PARAM_OTHER_OUTBOUND_VAR ));
         }
 	}
 	

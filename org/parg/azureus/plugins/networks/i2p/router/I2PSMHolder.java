@@ -24,6 +24,7 @@ import java.util.*;
 
 import org.parg.azureus.plugins.networks.i2p.I2PHelperAdapter;
 
+import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.SystemTime;
@@ -343,13 +344,13 @@ I2PSMHolder
 		try{
 			if ( address.length() < 400 ){
 				
-				if ( !address.endsWith( ".i2p" )){
+				if ( AENetworkClassifier.categoriseAddress( address ) != AENetworkClassifier.AT_I2P ){
 				
 					address += ".i2p";
 				}
 			}
 						
-			boolean b32_address = address.endsWith( ".b32.i2p" );
+			boolean b32_address = address.endsWith( ".b32.i2p" ) || address.endsWith( ".b32.i2p.alt" );
 			
 			I2PAppContext ctx = router.getContext();
 			

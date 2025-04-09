@@ -147,7 +147,9 @@ I2PHelperMessageHandler
 		
 			final String peer_host = address.getHostName();
 
-			if ( peer_host.endsWith( ".i2p" )){
+			String peer_net = AENetworkClassifier.categoriseAddress( peer_host );
+			
+			if ( peer_net == AENetworkClassifier.AT_I2P ){
 				
 				final OutgoingMessageQueue out_queue = connection.getOutgoingMessageQueue();
 
@@ -441,7 +443,7 @@ I2PHelperMessageHandler
 						}
 					});
 				
-			}else if ( peer_host.endsWith( ".onion" )){
+			}else if ( peer_net == AENetworkClassifier.AT_TOR ){
 
 				connection.getOutgoingMessageQueue().registerQueueListener(
 					new OutgoingMessageQueue.MessageQueueListener() 
@@ -871,6 +873,16 @@ I2PHelperMessageHandler
 					if ( host.endsWith( ".b32.i2p" )){
 						
 						byte[] h = Base32.decode( host.substring( 0, host.length() - 8 ));
+						
+						if ( h.length == 32 ){
+							
+							System.arraycopy( h, 0, hashes, pos, 32 );
+							
+							pos += 32;
+						}
+					}else if ( host.endsWith( ".b32.i2p.alt" )){
+						
+						byte[] h = Base32.decode( host.substring( 0, host.length() - 12 ));
 						
 						if ( h.length == 32 ){
 							

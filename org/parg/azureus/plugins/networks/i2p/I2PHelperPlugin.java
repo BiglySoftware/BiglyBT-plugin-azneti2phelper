@@ -929,26 +929,31 @@ I2PHelperPlugin
 			final BooleanParameter mix_enabled_param 	= config_model.addBooleanParameter2( I2PHelperRouter.PARAM_MIX_ENABLED, "azi2phelper.enable", I2PHelperRouter.PARAM_MIX_ENABLED_DEFAULT );
 			final IntParameter mix_in_hops_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_MIX_INBOUND_HOPS, "azi2phelper.inbound.hops", I2PHelperRouter.PARAM_MIX_INBOUND_HOPS_DEFAULT, 0, I2PHelperRouter.MAX_HOPS );
 			final IntParameter mix_in_quant_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_MIX_INBOUND_QUANTITY, "azi2phelper.inbound.quantity", I2PHelperRouter.PARAM_MIX_INBOUND_QUANTITY_DEFAULT, 1, I2PHelperRouter.MAX_TUNNELS );
+			final IntParameter mix_in_var_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_MIX_INBOUND_VAR, "azi2phelper.inbound.var", I2PHelperRouter.PARAM_MIX_INBOUND_VAR_DEFAULT, I2PHelperRouter.MIN_VAR, I2PHelperRouter.MAX_VAR );
 			final IntParameter mix_out_hops_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_MIX_OUTBOUND_HOPS, "azi2phelper.outbound.hops", I2PHelperRouter.PARAM_MIX_OUTBOUND_HOPS_DEFAULT, 0, I2PHelperRouter.MAX_HOPS );
 			final IntParameter mix_out_quant_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_MIX_OUTBOUND_QUANTITY, "azi2phelper.outbound.quantity", I2PHelperRouter.PARAM_MIX_OUTBOUND_QUANTITY_DEFAULT, 1, I2PHelperRouter.MAX_TUNNELS );
+			final IntParameter mix_out_var_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_MIX_OUTBOUND_VAR, "azi2phelper.outbound.var", I2PHelperRouter.PARAM_MIX_OUTBOUND_VAR_DEFAULT, I2PHelperRouter.MIN_VAR, I2PHelperRouter.MAX_VAR );
 
 			final BooleanParameter i2p_enabled_param 	= config_model.addBooleanParameter2( I2PHelperRouter.PARAM_PURE_ENABLED, "azi2phelper.enable", I2PHelperRouter.PARAM_PURE_ENABLED_DEFAULT );
 			final IntParameter i2p_in_hops_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_PURE_INBOUND_HOPS, "azi2phelper.inbound.hops", I2PHelperRouter.PARAM_PURE_INBOUND_HOPS_DEFAULT, 0, I2PHelperRouter.MAX_HOPS );
 			final IntParameter i2p_in_quant_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_PURE_INBOUND_QUANTITY, "azi2phelper.inbound.quantity", I2PHelperRouter.PARAM_PURE_INBOUND_QUANTITY_DEFAULT, 1, I2PHelperRouter.MAX_TUNNELS );
+			final IntParameter i2p_in_var_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_PURE_INBOUND_VAR, "azi2phelper.inbound.var", I2PHelperRouter.PARAM_PURE_INBOUND_VAR_DEFAULT, I2PHelperRouter.MIN_VAR, I2PHelperRouter.MAX_VAR );
 			final IntParameter i2p_out_hops_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_PURE_OUTBOUND_HOPS, "azi2phelper.outbound.hops", I2PHelperRouter.PARAM_PURE_OUTBOUND_HOPS_DEFAULT, 0, I2PHelperRouter.MAX_HOPS );
 			final IntParameter i2p_out_quant_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_PURE_OUTBOUND_QUANTITY, "azi2phelper.outbound.quantity", I2PHelperRouter.PARAM_PURE_OUTBOUND_QUANTITY_DEFAULT, 1, I2PHelperRouter.MAX_TUNNELS );
+			final IntParameter i2p_out_var_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_PURE_OUTBOUND_VAR, "azi2phelper.outbound.var", I2PHelperRouter.PARAM_PURE_OUTBOUND_VAR_DEFAULT, I2PHelperRouter.MIN_VAR, I2PHelperRouter.MAX_VAR );
 
 			final BooleanParameter other_enabled_param 	= config_model.addBooleanParameter2( I2PHelperRouter.PARAM_OTHER_ENABLED, "azi2phelper.enable", I2PHelperRouter.PARAM_OTHER_ENABLED_DEFAULT );
 			final IntParameter other_in_hops_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_OTHER_INBOUND_HOPS, "azi2phelper.inbound.hops", I2PHelperRouter.PARAM_OTHER_INBOUND_HOPS_DEFAULT, 0, I2PHelperRouter.MAX_HOPS );
 			final IntParameter other_in_quant_param 	= config_model.addIntParameter2( I2PHelperRouter.PARAM_OTHER_INBOUND_QUANTITY, "azi2phelper.inbound.quantity", I2PHelperRouter.PARAM_OTHER_INBOUND_QUANTITY_DEFAULT, 1, I2PHelperRouter.MAX_TUNNELS );
+			final IntParameter other_in_var_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_OTHER_INBOUND_VAR, "azi2phelper.inbound.var", I2PHelperRouter.PARAM_OTHER_INBOUND_VAR_DEFAULT, I2PHelperRouter.MIN_VAR, I2PHelperRouter.MAX_VAR );
 			final IntParameter other_out_hops_param 	= config_model.addIntParameter2( I2PHelperRouter.PARAM_OTHER_OUTBOUND_HOPS, "azi2phelper.outbound.hops", I2PHelperRouter.PARAM_OTHER_OUTBOUND_HOPS_DEFAULT, 0, I2PHelperRouter.MAX_HOPS );
 			final IntParameter other_out_quant_param 	= config_model.addIntParameter2( I2PHelperRouter.PARAM_OTHER_OUTBOUND_QUANTITY, "azi2phelper.outbound.quantity", I2PHelperRouter.PARAM_OTHER_OUTBOUND_QUANTITY_DEFAULT, 1, I2PHelperRouter.MAX_TUNNELS );
-
+			final IntParameter other_out_var_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_OTHER_OUTBOUND_VAR, "azi2phelper.outbound.var", I2PHelperRouter.PARAM_OTHER_OUTBOUND_VAR_DEFAULT, I2PHelperRouter.MIN_VAR, I2PHelperRouter.MAX_VAR );
 			
 			final Parameter[] tunnel_params =
-				{ 	mix_enabled_param, mix_in_hops_param, mix_in_quant_param, mix_out_hops_param, mix_out_quant_param,
-					i2p_enabled_param, i2p_in_hops_param, i2p_in_quant_param, i2p_out_hops_param, i2p_out_quant_param,
-					other_enabled_param, other_in_hops_param, other_in_quant_param, other_out_hops_param, other_out_quant_param
+				{ 	mix_enabled_param,   mix_in_hops_param,   mix_in_quant_param,   mix_in_var_param,   mix_out_hops_param,   mix_out_quant_param,   mix_out_var_param,
+					i2p_enabled_param,   i2p_in_hops_param,   i2p_in_quant_param,   i2p_in_var_param,   i2p_out_hops_param,   i2p_out_quant_param,   i2p_out_var_param,
+					other_enabled_param, other_in_hops_param, other_in_quant_param, other_in_var_param, other_out_hops_param, other_out_quant_param, other_out_var_param
 				};
 			
 			for ( Parameter p: tunnel_params ){
@@ -1218,37 +1223,43 @@ I2PHelperPlugin
 				config_model.createGroup( 
 					"azi2phelper.internals.tunnels.mixed",
 					new Parameter[]{ 
-						mix_enabled_param, mix_in_hops_param, mix_in_quant_param, mix_out_hops_param, mix_out_quant_param	
+						mix_enabled_param, mix_in_hops_param, mix_in_quant_param, mix_in_var_param, mix_out_hops_param, mix_out_quant_param, mix_out_var_param
 					});
 
 			mix_enabled_param.addEnabledOnSelection(mix_in_hops_param);
 			mix_enabled_param.addEnabledOnSelection(mix_in_quant_param);
+			mix_enabled_param.addEnabledOnSelection(mix_in_var_param);
 			mix_enabled_param.addEnabledOnSelection(mix_out_hops_param);
 			mix_enabled_param.addEnabledOnSelection(mix_out_quant_param);
+			mix_enabled_param.addEnabledOnSelection(mix_out_var_param);
 			
 			ParameterGroup tunnel_tab2 = 
 					config_model.createGroup( 
 						"azi2phelper.internals.tunnels.i2ponly",
 						new Parameter[]{ 
-							i2p_enabled_param, i2p_in_hops_param, i2p_in_quant_param, i2p_out_hops_param, i2p_out_quant_param	
+							i2p_enabled_param, i2p_in_hops_param, i2p_in_quant_param, i2p_in_var_param, i2p_out_hops_param, i2p_out_quant_param, i2p_out_var_param	
 						});
 			
 			i2p_enabled_param.addEnabledOnSelection(i2p_in_hops_param);
 			i2p_enabled_param.addEnabledOnSelection(i2p_in_quant_param);
+			i2p_enabled_param.addEnabledOnSelection(i2p_in_var_param);
 			i2p_enabled_param.addEnabledOnSelection(i2p_out_hops_param);
 			i2p_enabled_param.addEnabledOnSelection(i2p_out_quant_param);
+			i2p_enabled_param.addEnabledOnSelection(i2p_out_var_param);
 
 			ParameterGroup tunnel_tab3 = 
 					config_model.createGroup( 
 						"azi2phelper.internals.tunnels.other",
 						new Parameter[]{ 
-							other_enabled_param, other_in_hops_param, other_in_quant_param, other_out_hops_param, other_out_quant_param	
+							other_enabled_param, other_in_hops_param, other_in_quant_param, other_in_var_param, other_out_hops_param, other_out_quant_param, other_out_var_param	
 						});
 			
 			other_enabled_param.addEnabledOnSelection(other_in_hops_param);
 			other_enabled_param.addEnabledOnSelection(other_in_quant_param);
+			other_enabled_param.addEnabledOnSelection(other_in_var_param);
 			other_enabled_param.addEnabledOnSelection(other_out_hops_param);
 			other_enabled_param.addEnabledOnSelection(other_out_quant_param);
+			other_enabled_param.addEnabledOnSelection(other_out_var_param);
 
 			
 			tunnel_tab.addTab( tunnel_tab1 );
@@ -1424,20 +1435,26 @@ I2PHelperPlugin
 						router_properties.put( I2PHelperRouter.PARAM_MIX_ENABLED, mix_enabled_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_MIX_INBOUND_HOPS, mix_in_hops_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_MIX_INBOUND_QUANTITY, mix_in_quant_param.getValue());
+						router_properties.put( I2PHelperRouter.PARAM_MIX_INBOUND_VAR, mix_in_var_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_MIX_OUTBOUND_HOPS, mix_out_hops_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_MIX_OUTBOUND_QUANTITY, mix_out_quant_param.getValue());
+						router_properties.put( I2PHelperRouter.PARAM_MIX_OUTBOUND_VAR, mix_out_var_param.getValue());
 
 						router_properties.put( I2PHelperRouter.PARAM_PURE_ENABLED, i2p_enabled_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_PURE_INBOUND_HOPS, i2p_in_hops_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_PURE_INBOUND_QUANTITY, i2p_in_quant_param.getValue());
+						router_properties.put( I2PHelperRouter.PARAM_PURE_INBOUND_VAR, i2p_in_var_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_PURE_OUTBOUND_HOPS, i2p_out_hops_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_PURE_OUTBOUND_QUANTITY, i2p_out_quant_param.getValue());
+						router_properties.put( I2PHelperRouter.PARAM_PURE_OUTBOUND_VAR, i2p_out_var_param.getValue());
 
 						router_properties.put( I2PHelperRouter.PARAM_OTHER_ENABLED, other_enabled_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_OTHER_INBOUND_HOPS, other_in_hops_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_OTHER_INBOUND_QUANTITY, other_in_quant_param.getValue());
+						router_properties.put( I2PHelperRouter.PARAM_OTHER_INBOUND_VAR, other_in_var_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_OTHER_OUTBOUND_HOPS, other_out_hops_param.getValue());
 						router_properties.put( I2PHelperRouter.PARAM_OTHER_OUTBOUND_QUANTITY, other_out_quant_param.getValue());
+						router_properties.put( I2PHelperRouter.PARAM_OTHER_OUTBOUND_VAR, other_out_var_param.getValue());
 
 						I2PHelperRouter current_router = router;
 						
@@ -5318,7 +5335,7 @@ I2PHelperPlugin
 			return( null );
 		}
 		
-		if ( !host.toLowerCase().endsWith( ".i2p" )){
+		if ( AENetworkClassifier.categoriseAddress( host ) != AENetworkClassifier.AT_I2P ){
 			
 			return( null );
 		}

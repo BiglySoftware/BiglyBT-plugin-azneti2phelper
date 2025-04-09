@@ -55,6 +55,7 @@ import net.i2p.data.Base32;
 import net.i2p.data.Destination;
 
 import com.biglybt.core.tracker.protocol.PRHelpers;
+import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.BEncoder;
@@ -90,7 +91,7 @@ I2PHelperSocksProxy
 	
 	private Set<SOCKSProxyConnection>		connections = new HashSet<SOCKSProxyConnection>();
 	
-	private ThreadPool	connect_pool = new ThreadPool( "I2PHelperSocksProxyConnect", 32 );
+	private ThreadPool<AERunnable>	connect_pool = new ThreadPool<>( "I2PHelperSocksProxyConnect", 32 );
 
 	{
 		try{
@@ -444,11 +445,11 @@ I2PHelperSocksProxy
 		}
 	}
 	
-	protected static ThreadPool			async_read_pool 	= new ThreadPool( "I2PSocket relay read", 32, true );
+	protected static ThreadPool<AERunnable>			async_read_pool 	= new ThreadPool<>( "I2PSocket relay read", 32, true );
 	
 		// write pool is blocking as there is no non-blocking support for writes to I2P
 	
-	protected static ThreadPool			async_write_pool 	= new ThreadPool( "I2PSocket relay write", 256, true );
+	protected static ThreadPool<AERunnable>			async_write_pool 	= new ThreadPool<>( "I2PSocket relay write", 256, true );
 	
 	private class
 	SOCKSProxyConnection
@@ -574,7 +575,7 @@ I2PHelperSocksProxy
 					
 					final String	externalised_address = AEProxyFactory.getAddressMapper().externalise( unresolved );
 				
-					if ( !externalised_address.toLowerCase().endsWith(".i2p")){
+					if ( AENetworkClassifier.categoriseAddress( externalised_address ) != AENetworkClassifier.AT_I2P ){ 
 								
 						if ( !allow_public_fallback ){
 							

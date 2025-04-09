@@ -108,7 +108,7 @@ DHTTransportI2PRealImpl
 					
 					s = s.trim();
 					
-					if ( !s.endsWith( ".b32.i2p" )){
+					if ( ! ( s.endsWith( ".b32.i2p" ) ||s.endsWith( ".b32.i2p.alt" ))){
 						
 						s += ".b32.i2p";
 					}
