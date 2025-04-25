@@ -3261,7 +3261,7 @@ I2PHelperPlugin
 			if ( i2p_router != null ){
 				
 				try{
-					rinf 	= i2p_router.getRouterInfo().getCapabilities();
+					rinf 	= i2p_router.getCapabilities();
 					
 					if ( r.getFloodfillCapable()){
 						

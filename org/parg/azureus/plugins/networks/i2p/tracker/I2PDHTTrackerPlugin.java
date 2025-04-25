@@ -1565,6 +1565,7 @@ I2PDHTTrackerPlugin
 					}
 					
 				}else{
+					
 					String tor_host = router.getPlugin().getTorEndpoint( dht.getDHTIndex()).getHost();
 	
 					boolean	secondary_get = tor_host != null && has_tor;
@@ -1574,11 +1575,11 @@ I2PDHTTrackerPlugin
 					if ( secondary_get ){
 						
 						complete_count++;
-					}				
 					
-					if ( proxy_get ){
+						if ( proxy_get ){
 						
-						complete_count++;
+							complete_count++;
+						}
 					}
 					
 					GetAdapter get_adapter = new GetAdapter( rdht, download, details, target, derived_only, max_retry, complete_count, false );
