@@ -1478,6 +1478,12 @@ I2PHelperRouter
 		    		
 		    			dest.readBytes( is );
 		    			
+		    		}catch( Throwable e ){
+		    			
+		    			log( "Create failed, invalid key file: " + Debug.getNestedExceptionMessage( e ));
+		    			
+		    			dest = null;
+		    			
 		    		}finally{
 		    			
 		    			is.close();

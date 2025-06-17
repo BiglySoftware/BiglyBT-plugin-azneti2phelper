@@ -4486,7 +4486,7 @@ TorProxyDHT
 		protected String
 		getString()
 		{
-			return( super.getString() + ": " + source_host + "; state=" + getState() + "; age=" + TimeFormatter.formatColon(getAgeSeconds()));
+			return( super.getString() + ": " + source_host + "; state=" + getState() + "; rks=" + remote_key_state.size() + "; age=" + TimeFormatter.formatColon(getAgeSeconds()));
 		}
 	}
 	
