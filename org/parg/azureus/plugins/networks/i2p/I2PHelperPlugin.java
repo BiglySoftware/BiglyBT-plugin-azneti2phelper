@@ -586,7 +586,7 @@ I2PHelperPlugin
 	private static final int HTTP_PROXY_PORT_DEFAULT	= 14444;
 	private static final String HTTP_PROXY_OUTPROXIES_DEFAULT = "exit.stormycloud.i2p";
 	
-	private static final int CPU_THROTTLE_DEFAULT	= 2;
+	private static final int CPU_THROTTLE_DEFAULT	= 0;
 		
 	private volatile boolean	unloaded;
 	
@@ -6401,6 +6401,8 @@ I2PHelperPlugin
 	{
 		String[] nets = (String[])opts.get( "peer_networks" );
 		
+		String result = "";
+		
 		if ( nets != null ){
 			
 			String str = "";
@@ -6410,10 +6412,17 @@ I2PHelperPlugin
 				str += (str.length()==0?"":",") + net;
 			}
 			
-			return( "peer_networks=" + str );
+			result = "peer_networks=" + str;
 		}
 		
-		return( "" );
+		String protocol = (String)opts.get( "protocol" );
+		
+		if ( protocol != null ){
+			
+			result += (result.isEmpty()?"":", " ) + "protocol=" + protocol;
+		}
+		
+		return( result );
 	}
 
 	private boolean

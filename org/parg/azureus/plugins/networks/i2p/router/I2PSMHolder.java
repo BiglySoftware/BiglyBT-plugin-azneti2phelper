@@ -34,6 +34,8 @@ import net.i2p.I2PAppContext;
 import net.i2p.client.I2PSession;
 import net.i2p.client.I2PSessionMuxedListener;
 import net.i2p.client.SendMessageOptions;
+import net.i2p.client.datagram.Datagram2;
+import net.i2p.client.datagram.Datagram3;
 import net.i2p.client.datagram.I2PDatagramMaker;
 import net.i2p.client.naming.NamingService;
 import net.i2p.client.streaming.I2PServerSocket;
@@ -470,6 +472,35 @@ I2PSMHolder
 	        payload = dgMaker.makeI2PDatagram( payload );
 	        
 	        return( payload );
+		}
+	}
+	
+	public byte[]
+	makeI2PDatagram(
+		int				protocol,
+		Destination		dest,
+		byte[]			payload )
+	
+		throws Exception
+	{		
+		if ( isSessionClosedSupport()){
+
+			return( null );
+			
+		}else{
+			
+			if ( protocol == I2PSession.PROTO_DATAGRAM2 ){
+				
+				return( Datagram2.make( router.getContext(), session, payload, dest.calculateHash() ));
+				
+			}else if ( protocol == I2PSession.PROTO_DATAGRAM3 ){
+				
+				return( Datagram3.make( router.getContext(), session, payload ));
+				
+			}else{
+				
+				throw( new Exception( "Not supported" ));
+			}
 		}
 	}
 	

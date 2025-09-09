@@ -23,10 +23,15 @@
 
 package org.parg.azureus.plugins.networks.i2p.router;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.NoRouteToHostException;
 import java.net.SocketTimeoutException;
 import java.net.URL;
@@ -39,6 +44,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,6 +53,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
+import net.i2p.client.I2PSession;
+import net.i2p.client.I2PSessionMuxedListener;
+import net.i2p.client.SendMessageOptions;
 import net.i2p.client.streaming.I2PSocket;
 import net.i2p.client.streaming.I2PSocketOptions;
 import net.i2p.client.streaming.impl.MessageInputStream;
@@ -58,11 +67,14 @@ import com.biglybt.core.tracker.protocol.PRHelpers;
 import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.AEThread2;
+import com.biglybt.core.util.BDecoder;
 import com.biglybt.core.util.BEncoder;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.ThreadPool;
+import com.biglybt.net.udp.uc.PRUDPPacket;
+import com.biglybt.net.udp.uc.PRUDPPacketReply;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.torrent.Torrent;
@@ -86,6 +98,7 @@ I2PHelperSocksProxy
 {
 	private static final boolean TRACE = false;
 	
+	private final Object proxy_lock = new Object();
 	
 	private InetAddress local_address;
 	
@@ -172,7 +185,7 @@ I2PHelperSocksProxy
 	{
 		long now =  SystemTime.getMonotonousTime() ;
 		
-		synchronized( this ){
+		synchronized( proxy_lock ){
 			
 			if ( destroyed ){
 				
@@ -226,7 +239,7 @@ I2PHelperSocksProxy
 	removeIntermediateHost(
 		String		intermediate )
 	{
-		synchronized( this ){
+		synchronized( proxy_lock ){
 			
 			intermediate_host_map.remove( intermediate );
 			
@@ -241,7 +254,7 @@ I2PHelperSocksProxy
 	
 		throws AEProxyException
 	{
-		synchronized( this ){
+		synchronized( proxy_lock ){
 			
 			if ( destroyed ){
 				
@@ -273,7 +286,7 @@ I2PHelperSocksProxy
 	private void
 	tick()
 	{
-		synchronized( this ){
+		synchronized( proxy_lock ){
 	
 			for ( SOCKSProxyConnection con: connections ){
 				
@@ -391,7 +404,7 @@ I2PHelperSocksProxy
 	removeConnection(
 		SOCKSProxyConnection	connection )
 	{
-		synchronized( this ){
+		synchronized( proxy_lock ){
 			
 			connections.remove( connection );
 			
@@ -414,17 +427,14 @@ I2PHelperSocksProxy
 	{
 		List<SOCKSProxyConnection>	to_close = new ArrayList<SOCKSProxyConnection>();
 		
-		synchronized( this ){
+		synchronized( proxy_lock ){
 			
 			if ( destroyed ){
 				
 				return;
 			}
-			
-			synchronized( this ){ 
-				
-				destroyed = true;
-			}
+							
+			destroyed = true;
 			
 			to_close.addAll( connections );
 			
@@ -445,23 +455,192 @@ I2PHelperSocksProxy
 		}
 	}
 	
-	protected static ThreadPool<AERunnable>			async_read_pool 	= new ThreadPool<>( "I2PSocket relay read", 32, true );
+	private static ThreadPool<AERunnable>			async_read_pool 	= new ThreadPool<>( "I2PSocket relay read", 32, true );
 	
 		// write pool is blocking as there is no non-blocking support for writes to I2P
 	
-	protected static ThreadPool<AERunnable>			async_write_pool 	= new ThreadPool<>( "I2PSocket relay write", 256, true );
+	private static ThreadPool<AERunnable>			async_write_pool 	= new ThreadPool<>( "I2PSocket relay write", 256, true );
+	
+	
+	private Map<I2PSMHolder,SMHolderWrapper>		smh_map = new IdentityHashMap<>();
+	
+	private static final int UDP_PORT = 9000;
+	
+	private static class
+	SMHolderWrapper
+		implements I2PSessionMuxedListener
+	{
+			// fake address to ensure packet deserialisation treated as I2P address format
+		
+		private static final InetSocketAddress FAKE_I2P_ADDRESS = InetSocketAddress.createUnresolved( "fake.biglybt.tracker.i2p", 6969 );
+		
+		private I2PSMHolder		sm_holder;
+		
+		private Map<Integer,Object[]>	transactions 	= new HashMap<>();
+		private long					last_tidy		= SystemTime.getMonotonousTime();
+		
+		private 
+		SMHolderWrapper(
+			I2PSMHolder		_sm_holder )
+		{
+			sm_holder = _sm_holder;
+			
+			sm_holder.addMuxedSessionListener( this, I2PSession.PROTO_DATAGRAM_RAW, UDP_PORT );
+		}	
+		
+		boolean
+		addTransaction(
+			int					transaction_id,
+			MessageReceiver		receiver )
+		{
+			synchronized( transactions ){
+				
+				if ( transactions.containsKey(transaction_id)){
+					
+					return( false );
+					
+				}else{
+					
+					transactions.put( transaction_id, new Object[]{ SystemTime.getMonotonousTime(), receiver });
+				}
+			}
+			
+			tidy();
+			
+			return( true );
+		}
+			
+		void
+		removeTransaction(
+			int					transaction_id )
+		{
+			synchronized( transactions ){
+				
+				transactions.remove( transaction_id );
+			}
+		}
+		
+		boolean
+		isDead()
+		{
+			return( sm_holder.isSessionClosed());
+		}
+		
+		@Override
+		public void 
+		messageAvailable(
+			I2PSession	session, 
+			int			msgId, 
+			long		size, 
+			int			proto, 
+			int			fromport, 
+			int			toport )
+		{
+			try{	
+				byte[] payload = session.receiveMessage(msgId);
+	        
+				if ( payload != null ){
+					
+					DataInputStream dis = new DataInputStream(new ByteArrayInputStream(payload));
+					
+					PRUDPPacket reply_packet  = 
+							PRUDPPacketReply.deserialiseReply(null, FAKE_I2P_ADDRESS, dis );
+					
+					int transaction_id = reply_packet.getTransactionId();
+
+					Object[] entry;
+					
+					synchronized( transactions ){
+						
+						entry = transactions.remove( transaction_id );
+					}
+					
+					if ( entry != null ){
+						
+						((MessageReceiver)entry[1]).receiveMessage( transaction_id, payload );
+					}
+				}
+			}catch( Throwable e ){
+				
+			}
+			
+			tidy();
+		}
+		
+		private void
+		tidy()
+		{
+			long now = SystemTime.getMonotonousTime();
+			
+			if ( now - last_tidy > 30*1000 ){
+				
+				last_tidy = now;
+				
+				synchronized( transactions ){
+					
+					Iterator<Object[]> it = transactions.values().iterator();
+					
+					while( it.hasNext()){
+						
+						if ( now - (Long)it.next()[0] > 2*60*1000 ){
+							
+							it.remove();
+						}
+					}
+				}
+			}
+		}
+		
+		@Override
+		public void 
+		disconnected(
+			I2PSession session)
+		{
+		}
+		
+		@Override
+		public void 
+		errorOccurred(
+			I2PSession	session, 
+			String		message, 
+			Throwable	error)
+		{
+		}
+		
+		@Override
+		public void 
+		messageAvailable(
+			I2PSession session, 
+			int msgId, 
+			long size)
+		{
+			Debug.out( "eh" );
+		}
+
+		@Override
+		public void 
+		reportAbuse(
+			I2PSession	session, 
+			int			severity)
+		{
+		}
+		
+		public interface
+		MessageReceiver
+		{
+			public void
+			receiveMessage(
+				long		transaction_id,
+				byte[]		data );
+		}
+	}
 	
 	private class
 	SOCKSProxyConnection
 		implements AESocksProxyPlugableConnection
 	{
-		
-			// try to buffer at least a whole block
-		
-		public static final int RELAY_BUFFER_SIZE	= 64*1024 + 256;
-		
-		private I2PSocket					socket;
-		private boolean						socket_closed;
+		private ProtocolImpl		impl;
+		private boolean				pc_closed;
 		
 		private AESocksProxyConnection		proxy_connection;
 		private Map<String,Object>			options;
@@ -469,9 +648,7 @@ I2PHelperSocksProxy
 		
 		private String						original_unresolved;
 		private int							original_port;
-		
-		private proxyStateRelayData			relay_state;
-		
+				
 		protected
 		SOCKSProxyConnection(
 			AESocksProxyConnection			_proxy_connection )
@@ -516,7 +693,7 @@ I2PHelperSocksProxy
 				
 				String ha = resolved.getHostAddress();
 				
-				synchronized( this ){
+				synchronized( proxy_lock ){
 					
 					Object[]	intermediate = intermediate_host_map.remove( ha );
 					
@@ -600,48 +777,31 @@ I2PHelperSocksProxy
 						delegate.connect( _address );
 	
 					}else{
+						
+						
+						String protocol = "TCP";
+						
+						if ( options != null && options.containsKey( "protocol" )){
 							
-						connect_pool.run(
-							new AERunnable()
-							{
-								@Override
-								public void
-								runSupport()
-								{									
-									trace( "    delegating to I2P" );
-									
-									try{
-										
-											// remove the .i2p
-										
-										String new_externalised_address = externalised_address.substring( 0, externalised_address.length() - 4 );
-										
-								        socket = connectToAddress( new_externalised_address, _address.getPort(), options );
-								       	
-								        proxy_connection.connected();
-								        
-								        if ( output != null ){
-								        	
-								        	output.put( "connected", true );
-								        }
-									}catch( Throwable e ){
+							protocol = (String)options.get( "protocol" );
+						}
 
-										setError( e );
-										
-										try{
-											proxy_connection.close();
-											
-										}catch( Throwable f ){
-											
-											f.printStackTrace();
-										}
-										
-											//e.printStackTrace();
-										
-										trace( "I2PSocket creation fails: " + Debug.getNestedExceptionMessage(e) );
-									}
-								}
-							});
+						synchronized( proxy_lock ){
+							
+							if ( pc_closed ){
+								
+								throw( new IOException( "Connection already closed" ));
+							}
+						
+							if ( protocol.equals( "TCP" )){
+
+								impl = new TCPImpl( externalised_address, _address );
+								
+							}else{
+								
+								impl = new UDPImpl( externalised_address, _address );
+							}
+						}
 						
 						handling_connection = true;
 					}
@@ -657,19 +817,50 @@ I2PHelperSocksProxy
 			}
 		}
 		
-		/*
-		private void
-		tick()
+		public void
+		relayData()
+		
+			throws IOException
 		{
-			synchronized( this ){
+			ProtocolImpl i;
+			
+			synchronized( proxy_lock ){
 				
-				if ( relay_state != null ){
+				i = impl;
+			}
+			
+			if ( i == null ){
+				
+				return;
+			}
+			
+			i.relayData();
+		}
+		
+		public void
+		close()
+		
+			throws IOException
+		{
+			try{
+				ProtocolImpl i;
+				
+				synchronized( proxy_lock ){
 					
-					relay_state.tick();
+					pc_closed = true;
+					
+					i = impl;
 				}
+				
+				if ( i != null ){
+				
+					i.close();
+				}
+			}finally{
+				
+				removeConnection( this );
 			}
 		}
-		*/
 		
 		private void
 		setError(
@@ -681,787 +872,1269 @@ I2PHelperSocksProxy
 				output.put( "error", e );
 			}
 		}
+
 		
-		@Override
-		public void
-		relayData()
-		
-			throws IOException
+		abstract class
+		ProtocolImpl
 		{
-			synchronized( this ){
+			public abstract void
+			relayData()
 			
-				if ( socket_closed ){
-				
-					throw( new IOException( "I2PPluginConnection::relayData: socket already closed"));
-				}
+				throws IOException;
 			
-				relay_state = new proxyStateRelayData( proxy_connection.getConnection());
-			}
+			public abstract void
+			close()
+			
+				throws IOException;
 		}
 		
-		@Override
-		public void
-		close()
-		
-			throws IOException
+		class
+		UDPImpl
+			extends ProtocolImpl
 		{
-			synchronized( this ){
+			private final AESocksProxyAddress		address;
 			
-				if ( socket != null && !socket_closed ){
-					
-					socket_closed	= true;
-				
-					if ( relay_state != null ){
-						
-						relay_state.close();
-					}
-					
-					final I2PSocket	f_socket	= socket;
-					
-					socket	= null;
-					
-					AEThread2 t = 
-						new AEThread2( "I2P SocketCloser" )
-						{
-							@Override
-							public void
-							run()
-							{
-								try{
-									f_socket.close();
-									
-								}catch( Throwable e ){
-									
-								}
-							}
-						};
-					
-					t.start();
-				}
-			}
+			private I2PSMHolder			sm_holder;
+			private SMHolderWrapper		sm_holder_wrapper;
 			
-			removeConnection( this );
-		}
-		
-		protected class
-		proxyStateRelayData
-			implements AEProxyState
-		{
-			private static final boolean LOG_CONTENT = false;
+			private Destination remote_dest;
 			
-			AEProxyConnection		connection;
-			ByteBuffer				source_buffer;
+			private boolean assoc_closed;
 			
-			volatile ByteBuffer		target_buffer;
+			private ProxyStateRelayData	relay_state;
 			
-			SocketChannel			source_channel;
-			
-			MessageInputStream		input_stream;
-			OutputStream			output_stream;
-			
-			long					outward_bytes	= 0;
-			long					inward_bytes	= 0;
-				
-			byte[]		i2p_input_buffer = new byte[RELAY_BUFFER_SIZE];
-			boolean		i2p_read_active;
-			boolean		i2p_read_deferred;
-			
-			boolean 	i2p_read_dead;
-
-			Object lock = new Object();
-			
-			protected
-			proxyStateRelayData(
-				AEProxyConnection	_connection )
-			
-				throws IOException
-			{		
-				// System.out.println( "Relay start: " + socket.getPeerDestination());
-
-				connection	= _connection;
-				
-				source_channel	= connection.getSourceChannel();
-				
-				source_buffer	= ByteBuffer.allocate( RELAY_BUFFER_SIZE );
-				
-				input_stream 	= (MessageInputStream)socket.getInputStream();
-				output_stream 	= socket.getOutputStream();
-
-				input_stream.setReadTimeout( 0 );	// non-blocking
-				
-				connection.setReadState( this );
-				
-				connection.setWriteState( this );
-				
-				connection.requestReadSelect( source_channel );
-							
-				connection.setConnected();
-				
-				input_stream.setActivityListener(
-					new ActivityListener(){
-						
-						@Override
-						public void 
-						activityOccurred()
-						{
-							readFromI2P();
-						}
-					});
-				
-				readFromI2P();
-			}
-			
-			/*
-			private void
-			tick()
+			UDPImpl(
+				String 					_externalised_address,
+				AESocksProxyAddress		_address )
 			{
-				try{
-					System.out.println( "    " + getStateName() + " - ready=" + input_stream.available());
-					
-				}catch( Throwable e ){
-					
-				}
-			}
-			*/
-			
-			private void
-			readFromI2P()
-			{
-				synchronized( lock ){
-					
-					if ( i2p_read_dead ){
-						
-						return;
-					}
-					
-					if ( i2p_read_active || target_buffer != null ){
-						
-						i2p_read_deferred = true;
-						
-						return;
-					}
-					
-					i2p_read_active = true;
-				}
+				address	= _address;
 				
-				async_read_pool.run(
+				connect_pool.run(
 					new AERunnable()
 					{
 						@Override
 						public void
 						runSupport()
-						{	
-							boolean	went_async = false;
-
-							try{											
-								while( !connection.isClosed()){
-								
-									try{
-										trace( "I2PCon: " + getStateName() + " : read Starts <- I2P " );
-	
-										long	start = System.currentTimeMillis();
-										
-										int	len = input_stream.read( i2p_input_buffer );
-										
-										if ( len == 0 ){
-											
-											synchronized( lock ){
-												
-												if ( !i2p_read_deferred ){
-																								
-													went_async = true;
-													
-													return;
-												}
-												
-												i2p_read_deferred = false;
-											}
-											
-											continue;
-										}
-										
-										if ( len < 0 ){
-											
-											throw( new IOException( "Connection closed" ));
-										}
-																	
-										trace( "I2PCon: " + getStateName() + " : read Done <- I2P - " + len + ", elapsed = " + ( System.currentTimeMillis() - start ));
-										
-										if ( target_buffer != null ){
-											
-											Debug.out("I2PluginConnection: target buffer should be null" );
-										}
-										
-										// System.out.println( new String( buffer, 0, len ));
-										
-										target_buffer = ByteBuffer.wrap( i2p_input_buffer, 0, len );
-										
-										read();
-											
-										if ( target_buffer != null ){
-											
-											went_async = true;
-											
-											return;
-										}
-									}catch( Throwable e ){
-										
-										setError( e );
-										
-										boolean ignore = false;
-										
-										if ( 	e instanceof ClosedChannelException ||
-												e instanceof SocketTimeoutException ){
-											
-											ignore = true;
-											
-										}else if ( e instanceof IOException ){
-											
-											String message = Debug.getNestedExceptionMessage( e );
-											
-											if ( message != null ){
-												
-												message = message.toLowerCase( Locale.US );
-											
-												if (	message.contains( "closed" ) ||
-														message.contains( "aborted" ) ||
-														message.contains( "disconnected" ) ||
-														message.contains( "reset" )){
-										
-													ignore = true;
-												}
-											}
-										}
-										
-										if ( !ignore ){
-											
-											Debug.out( e );
-										}
-										
-										break;
-									}
-								}
-								
-								if ( !proxy_connection.isClosed()){
-									
-									try{
-										proxy_connection.close();
-										
-									}catch( IOException e ){
-										
-										Debug.printStackTrace(e);
-									}
-								}
-							}finally{
+						{									
+							trace( "    delegating to I2P" );
 							
-								synchronized( lock ){
+							try{
+								
+									// remove the .i2p
+								
+								String new_externalised_address = _externalised_address.substring( 0, _externalised_address.length() - 4 );
+								
+								sm_holder = getSocketManager( options );
+
+								synchronized( smh_map ){
 									
-									i2p_read_active = false;
+									sm_holder_wrapper = smh_map.get( sm_holder );
 									
-									if (!went_async ){
+									if ( sm_holder_wrapper == null ){
 										
-										i2p_read_dead = true;
-									}
-									
-									if ( i2p_read_deferred ){
+										sm_holder_wrapper = new SMHolderWrapper(sm_holder);
 										
-										i2p_read_deferred = false;
+										smh_map.put( sm_holder, sm_holder_wrapper );
 										
-										readFromI2P();
+										Iterator<SMHolderWrapper> it = smh_map.values().iterator();
+										
+										while( it.hasNext()){
+											
+											SMHolderWrapper x = it.next();
+											
+											if ( x != sm_holder_wrapper && x.isDead()){
+												
+												it.remove();
+											}
+										}
 									}
 								}
+								
+								remote_dest = sm_holder.lookupAddress( new_externalised_address, adapter );
+								
+								if ( remote_dest.getHash().equals( sm_holder.getMyDestination().getHash())){
+																		
+									throw( new Exception( "Attempting to connect to ourselves" ));
+								}
+						       	
+						        proxy_connection.connected();
+						        
+						        if ( output != null ){
+						        	
+						        	output.put( "connected", true );
+						        }
+							}catch( Throwable e ){
+
+								setError( e );
+								
+								try{
+									proxy_connection.close();
+									
+								}catch( Throwable f ){
+									
+									f.printStackTrace();
+								}
+								
+									//e.printStackTrace();
+								
+								trace( "UDP address lookup fails: " + Debug.getNestedExceptionMessage(e) );
 							}
 						}
 					});
 			}
+						
+			public void
+			relayData()
 			
-			protected void
+				throws IOException
+			{
+				synchronized( proxy_lock ){
+					
+					if ( assoc_closed ){
+					
+						throw( new IOException( "I2PPluginConnection::relayData: already closed"));
+					}
+				
+					relay_state = new ProxyStateRelayData( proxy_connection.getConnection());
+				}
+			}
+			
+			public void
 			close()
-			{	
-				// System.out.println( "Relay end: " + socket.getPeerDestination());
-				
-				trace( "I2PCon: " + getStateName() + " close" );
-			}
-			
-			protected void
-			read()
 			
 				throws IOException
 			{
-					// data from I2P
-				
-				connection.setTimeStamp();
-			
-				if ( LOG_CONTENT ){
-					System.out.println( new String( target_buffer.array(), target_buffer.arrayOffset(), target_buffer.remaining()));
-				}
-				
-				int written = source_channel.write( target_buffer );
+				synchronized( proxy_lock ){
 					
-				trace( "I2PCon: " + getStateName() + " : write -> AZ - " + written );
-				
-				inward_bytes += written;
-				
-				if ( target_buffer.hasRemaining()){
-				
-					connection.requestWriteSelect( source_channel );
+					if ( !assoc_closed ){
+						
+						assoc_closed	= true;
 					
-				}else{
-				
-					target_buffer	= null;
+						if ( relay_state != null ){
+							
+							relay_state.close();
+						}
+					}
 				}
 			}
 			
-			@Override
-			public boolean
-			read(
-				SocketChannel 		sc )
-			
-				throws IOException
+			protected class
+			ProxyStateRelayData
+				implements AEProxyState, SMHolderWrapper.MessageReceiver
 			{
-				if ( source_buffer.position() != 0 ){
-					
-					Debug.out( "I2PluginConnection: source buffer position invalid" );
-				}
+				private static final boolean LOG_CONTENT = false;
 				
-					// data read from source
+				AEProxyConnection		connection;
 				
-				connection.setTimeStamp();
-																
-				final int	len = sc.read( source_buffer );
-		
-				if ( len == 0 ){
-					
-					return( false );
-				}
+				boolean					udp_connected;
 				
-				if ( len == -1 ){
-					
-					throw( new EOFException( "read channel shutdown" ));
-					
-				}else{
-					
-					if ( source_buffer.position() > 0 ){
+				int						source_state = 0;
+				ByteBuffer				source_buffer;
+								
+				SocketChannel			source_channel;
+				
+				ByteBuffer				target_buffer;
+				
+				long					outward_bytes	= 0;
+				long					inward_bytes	= 0;
 						
-						connection.cancelReadSelect( source_channel );
-						
-						trace( "I2PCon: " + getStateName() + " : read <- AZ - " + len );
-						
-							// offload the write to separate thread as can't afford to block the
-							// proxy
-					
-						async_write_pool.run(
-							new AERunnable()
-							{
-								@Override
-								public void
-								runSupport()
-								{
-									try{					
-										source_buffer.flip();
-										
-										long	start = System.currentTimeMillis();
-										
-										trace( "I2PCon: " + getStateName() + " : write Starts -> I2P - " + len );
-										
-											/*	The I2PTunnel code ends up spewing headers like this:
-											 	GET / HTTP/1.1
-												Host: ladedahdedededed.b32.i2p
-												Cookie: PHPSESSID=derptyderp
-												Cache-Control: max-age=0
-												Accept-Encoding: 
-												X-Accept-Encoding: x-i2p-gzip;q=1.0, identity;q=0.5, deflate;q=0, gzip;q=0, *;q=0
-												User-Agent: MYOB/6.66 (AN/ON)
-												Connection: close
-												
-												Some services insist on the referrer being removed otherwise the throw 'permission denied' errors
-												Also probably makes sense to switch the Host: record to always be the b32 address.
-												
-												Note the switch in accept-encoding. This doesn't appear to be required from some testing
-												I've done but again something to look out for
-												
-																							
-											 	I2PTunnelHTTPServer adds the following headers, might be worth a look one day
-										     	private static final String HASH_HEADER = "X-I2P-DestHash";
-										    	private static final String DEST64_HEADER = "X-I2P-DestB64";
-										    	private static final String DEST32_HEADER = "X-I2P-DestB32";
-									        	addEntry(headers, HASH_HEADER, peerHash.toBase64());
-									        	addEntry(headers, DEST32_HEADER, Base32.encode(peerHash.getData()) + ".b32.i2p");
-									        	addEntry(headers, DEST64_HEADER, socket.getPeerDestination().toBase64());
-
-												str = str.replace( "Connection: keep-alive", "Connection: close" );
-
-											 */
-										
-											// gonna be lazy here and assume that if this is an HTTP request then the
-											// headers are present in the initial buffer read
-										
-										byte[] 	array 			= source_buffer.array();
-										int		array_offset	= 0;
-										
-										if ( outward_bytes == 0 ){
-																				
-											for ( int i=0;i<len-3;i++){
-												
-												if ( 	array[i] 	== '\r' &&
-														array[i+1]	== '\n' &&
-														array[i+2]	== '\r' &&
-														array[i+3]	== '\n' ){
-													
-													String str = new String( array, 0, i+2, "ISO8859-1" );
-
-													if ( LOG_CONTENT ){
-														System.out.println( str );
-													}
-													
-													String[] lines = str.split( "\r\n" );
-													
-													boolean is_http = false;
-													
-													List<String>	headers = new ArrayList<String>();
-													
-													for ( int j=0;j<lines.length;j++){
-													
-														String line = lines[j].trim();
-														
-														if ( j == 0 ){
-															
-															int pos1 = line.indexOf(' ');
-															int pos2 = line.lastIndexOf( ' ' );
-															
-															if ( pos1 != -1 && pos2 != -1 ){
-																
-																String method = line.substring( 0,  pos1 ).toUpperCase(Locale.US);
-																
-																if ( method.equals( "GET" ) || method.equals( "HEAD" ) || method.equals( "POST")){
-																	
-																	String protocol = line.substring( pos2 + 1 ).toUpperCase( Locale.US );
-																	
-																	if ( protocol.startsWith( "HTTP" )){
-																		
-																		is_http = true;
-																	}
-																}
-															}
-														
-															if ( !is_http ){
-																
-																break;
-																
-															}else{
-																
-																String url_part = line.substring( pos1+1, pos2 ).trim();
-																
-																int	pos = url_part.indexOf( '?' );
-																
-																if ( pos != -1 ){
-																																		
-																	String[]	args = url_part.substring( pos+1 ).split( "&" );
-																	
-																	Map<String,String> arg_map = new HashMap<String,String>();
-																	
-																	for ( String arg: args ){
-																		
-																		String[] bits = arg.split( "=", 2 );
-																		
-																		if ( bits.length == 2 ){
-																			String 	lhs = bits[0];
-																			String	rhs = bits[1];
-																			
-																			arg_map.put( lhs, rhs );
-																		}
-																	}
-																	
-																	if ( 	arg_map.containsKey( "info_hash" ) &&
-																			arg_map.containsKey( "peer_id" ) &&
-																			arg_map.containsKey( "uploaded" )){
-																		
-																		StringBuffer sb = new StringBuffer( 1024 );
-																		
-																		sb.append( line.substring( 0, pos + 1 + pos1 + 1 ));
-																		
-																		sb.append( "info_hash=" + arg_map.get( "info_hash" ));
-																		sb.append( "&peer_id=" + arg_map.get( "peer_id" ));
-																		sb.append( "&port=6881" );
-																		sb.append( "&ip=" + getSocketManager( options ).getMyDestination().toBase64() + ".i2p" );
-																		sb.append( "&uploaded=" + arg_map.get( "uploaded" ));
-																		sb.append( "&downloaded=" + arg_map.get( "downloaded" ));
-																		sb.append( "&left=" + arg_map.get( "left" ));
-																		sb.append( "&compact=1" );
-																		
-																		String event = arg_map.get( "event" );
-																		
-																		if ( event != null ){
-																			sb.append( "&event=" + event );
-																		}
-																		
-																		String num_want = arg_map.get( "numwant" );
-																		
-																		if ( num_want != null ){
-																			sb.append( "&numwant=" + num_want );
-																		}else{
-																			//if ( event != null )
-																		}
-																		
-																			// lastly patch in any existing url params
-																		
-																		PluginInterface pi = adapter.getPluginInterface();
-																				
-																		if ( pi != null ){
-																			
-																			try{
-																				byte[] hash = URLDecoder.decode(arg_map.get( "info_hash" ), "ISO-8859-1").getBytes( "ISO-8859-1" );
-																				
-																				Download dl = pi.getDownloadManager().getDownload( hash );
-																				
-																				if ( dl != null ){
-																				
-																					Torrent t = dl.getTorrent();
-																					
-																					if ( t != null ){
-																					
-																						List<URL>	urls = new ArrayList<URL>();
-																					
-																						urls.add( t.getAnnounceURL());
-																					
-																						for ( TorrentAnnounceURLListSet set: t.getAnnounceURLList().getSets()){
-																							
-																							urls.addAll( Arrays.asList(set.getURLs()));
-																						}
-																						
-																						for ( URL u: urls ){
-																							
-																							if ( u == null ){
-																								
-																								continue;
-																							}
-																							
-																							if ( u.getHost().equals( original_unresolved )){
-																								
-																								int	u_port = u.getPort();
-																								
-																								if ( u_port == -1 ){
-																									
-																									u_port = 80;
-																								}
-																								
-																								if ( u_port == original_port || u_port == 80 && original_port == -1 ){
-																									
-																									String query = u.getQuery();
-																									
-																									if ( query != null && query.length() > 0 ){
-																										
-																										sb.append( "&" + query );
-																										
-																										break;
-																									}
-																								}
-																							}
-																						}
-																					}
-																				}																				
-																			}catch( Throwable e ){
-																				
-																			}
-																		}
-																		
-																		sb.append( line.substring( pos2 ));
-																		
-																		line = sb.toString();
-																		
-																		// System.out.println( line );
-																	}
-																}
-													
-																headers.add( line );
-															}
-														}else{
-														
-															String[] bits = line.split( ":", 2 );
-															
-															if ( bits.length != 2 ){
-																
-																headers.add( line );
-																
-															}else{
-															
-																String	kw = bits[0].toUpperCase( Locale.US );
-																
-																if ( kw.equals( "REFERER" )){
-																	
-																	// skip it
-																	
-																}else if ( kw.equals( "HOST" )){
-																	
-																	I2PSocket s = socket;
-																	
-																	Destination peer_dest = s==null?null:s.getPeerDestination();
-																	
-																	if ( peer_dest == null ){
-																		
-																		throw( new IOException( "Socked closed" ));
-																	}
-																	
-																	String target_host = bits[1];
-																	
-																	int port = 0;
-																	
-																	int	pos = target_host.indexOf( ':' );
-																	
-																	if ( pos != -1 ){
-																		
-																		port = Integer.parseInt( target_host.substring( pos+1 ));
-																	}
-																	
-																	String host_header =  "Host: " + Base32.encode( peer_dest.calculateHash().getData()) + ".b32.i2p";
-						
-																	if ( port > 0 ){
-																		
-																		host_header += ":" + port;
-																	}
-																	
-																	headers.add( host_header );
-																
-																}else if ( kw.equals( "USER-AGENT" )){
+				Object lock = new Object();
+				
+				protected
+				ProxyStateRelayData(
+					AEProxyConnection	_connection )
+				
+					throws IOException
+				{		
+					// System.out.println( "Relay start: " + socket.getPeerDestination());
 	
-																	headers.add( "User-Agent: " + Constants.APP_NAME );
-
-																}else{
-																	
-																	headers.add( line );
-																}
-															}
-														}
-													}
-													
-													if ( is_http ){
-														
-														StringBuilder sb = new StringBuilder( len+128 );
-														
-														for ( String header: headers ){
+					connection	= _connection;
+					
+					source_channel	= connection.getSourceChannel();
 															
-															sb.append( header );
-															sb.append( "\r\n" );
-														}
-														
-														sb.append( "\r\n" );
-														
-														String oh = sb.toString();
-														
-														//System.out.println( oh );
-														
-														byte[] output_headers = oh.getBytes( "ISO8859-1" );
-														
-														output_stream.write( output_headers );
-													
-														array_offset = i+4;
-													}
-													
-													break;
-												}																				
-											}
-										}
-										
-										int	rem = len - array_offset;
-										
-										if ( rem > 0 ){
+					connection.setReadState( this );
+					
+					connection.setWriteState( this );
+					
+					connection.requestReadSelect( source_channel );
+								
+					connection.setConnected();
+				}
+			
+				public boolean
+				read(
+					SocketChannel 		sc )
+	
+					throws IOException
+				{
+					connection.setTimeStamp();
+					
+					if ( source_state == 0 ){
+						
+						if ( source_buffer == null ){
+							
+							source_buffer = ByteBuffer.allocate( 4 );
+						}
+					}
+					
+					final int	len = sc.read( source_buffer );
+			
+					if ( len == 0 ){
+						
+						return( false );
+					}
+					
+					if ( len == -1 ){
+						
+						throw( new EOFException( "read channel shutdown" ));
+						
+					}else{
+						
+						if ( source_buffer.remaining() == 0 ){
+							
+							if ( source_state == 0 ){
+								
+									// got header
+								
+								int body_len  = new DataInputStream( new ByteArrayInputStream( source_buffer.array())).readInt();
+								
+								source_state = 1;
+								
+								source_buffer = ByteBuffer.allocate( body_len );
+								
+							}else{
+								
+									// got body
+																						        
+								byte[] payload_in_bytes = source_buffer.array();
+								
+								Map<String,Object> payload_in = BDecoder.decode( payload_in_bytes );
+								
+								try{
+									byte[] packet = (byte[])payload_in.get( "packet" );
+									
+									int transaction_id = ((Number)payload_in.get( "txn" )).intValue();
+									
+									int proto = udp_connected?I2PSession.PROTO_DATAGRAM3:I2PSession.PROTO_DATAGRAM2;
+									
+									packet = sm_holder.makeI2PDatagram( proto, remote_dest, packet );
+					            
+									SendMessageOptions opts = new SendMessageOptions();
+									
+									opts.setDate( SystemTime.getCurrentTime() + 60*1000 );
 
-											output_stream.write( array, array_offset, rem );
-										}
+									opts.setSendLeaseSet( proto == I2PSession.PROTO_DATAGRAM2 );
+									
+									if ( !sm_holder_wrapper.addTransaction( transaction_id, this )){
 										
-										source_buffer.position( 0 );
-										
-										source_buffer.limit( source_buffer.capacity());
-										
-										output_stream.flush();
-										
-										trace( "I2PCon: " + getStateName() + " : write done -> I2P - " + len + ", elapsed = " + ( System.currentTimeMillis() - start ));
-										
-										outward_bytes += len;
-										
-										connection.requestReadSelect( source_channel );								
-
-									}catch( Throwable e ){
-										
-										setError( e );
-										
-										connection.failed( e );
+										throw( new Exception( "Duplicate transaction id" ));
 									}
+									
+									boolean sent = false;
+									
+									try{
+										if ( sm_holder.sendMessage(
+												remote_dest,
+												packet,
+												0,
+												packet.length,
+												proto,
+												UDP_PORT,
+												address.getPort(),
+												opts )){
+											
+											outward_bytes += packet.length;
+											
+											sent = true;
+											
+										}else{
+											
+											throw( new IOException( "sendMessage failed" ));
+										}
+									}finally{
+										
+										if ( !sent ){
+											
+											sm_holder_wrapper.removeTransaction( transaction_id );
+										}
+									}
+									
+								}catch( Throwable e ){
+									
+									throw( new IOException( "Failed to send message", e ));
+									
+								}finally{
+									
+									source_state = 0;
+									
+									source_buffer = null;
 								}
-							});			
+							}
+						}else{
+							
+							connection.requestReadSelect( source_channel );		
+						}
+						
+						return( true );
+					}
+				}
+	
+				@Override
+				public void 
+				receiveMessage(
+					long 	transaction_id, 
+					byte[]	packet )
+				{	
+					udp_connected = true;
+					
+					try{
+						if ( target_buffer != null ){
+							
+							Debug.out( "target_buffer should be null" );
+						}
+						
+						Map<String,Object> payload_out = new HashMap<>();
+						
+						payload_out.put( "packet", packet );
+						payload_out.put( "txn", transaction_id );
+						
+						byte[] payload_out_bytes = BEncoder.encode( payload_out );
+												
+						ByteArrayOutputStream baos = new ByteArrayOutputStream( payload_out_bytes.length + 4 );
+						
+						DataOutputStream dos = new DataOutputStream(baos);
+						
+						dos.writeInt( payload_out_bytes.length );
+						dos.write( payload_out_bytes );;
+						
+						dos.flush();
+						
+						target_buffer = ByteBuffer.wrap( baos.toByteArray());
+						
+						int written = source_channel.write( target_buffer );
+						
+						trace( "I2PCon: " + getStateName() + " : write -> AZ - " + written );
+						
+						inward_bytes += written;
+						
+						if ( target_buffer.hasRemaining()){
+						
+							connection.requestWriteSelect( source_channel );
+							
+						}else{
+						
+							target_buffer	= null;
+							
+							connection.requestReadSelect(source_channel);
+						}
+					}catch( Throwable e ){
+						
+						setError( e );
+						
+						connection.failed( e );
 					}
 				}
 				
-				return( true );
+				public boolean
+				write(
+					SocketChannel 		sc )
+	
+					throws IOException
+				{
+					int written = source_channel.write( target_buffer );
+					
+					trace( "I2PCon: " + getStateName() + " : write -> AZ - " + written );
+					
+					inward_bytes += written;
+					
+					if ( target_buffer.hasRemaining()){
+					
+						connection.requestWriteSelect( source_channel );
+						
+					}else{
+					
+						target_buffer	= null;
+						
+						connection.requestReadSelect(source_channel);
+					}	
+					
+					return( written > 0 );
+				}
+	
+				@Override
+				public boolean
+				connect(
+					SocketChannel	sc )
+				
+					throws IOException
+				{
+					throw( new IOException( "unexpected connect" ));
+				}
+				
+				protected void
+				close()
+				{	
+					// System.out.println( "Relay end: " + socket.getPeerDestination());
+					
+					trace( "I2PCon: " + getStateName() + " close" );
+				}
+				
+				@Override
+				public String
+				getStateName()
+				{
+					String	state = this.getClass().getName();
+					
+					int	pos = state.indexOf( "$");
+					
+					state = state.substring(pos+1);
+					
+					return( state  +" [out=" + outward_bytes +",in=" + inward_bytes +"] " );
+				}		
+			}
+		}
+		
+		class
+		TCPImpl
+			extends ProtocolImpl 
+		{
+				// try to buffer at least a whole block
+				
+			public static final int RELAY_BUFFER_SIZE	= 64*1024 + 256;
+			
+			private I2PSocket					socket;
+			private boolean						socket_closed;
+
+			private ProxyStateRelayData			relay_state;
+
+			TCPImpl(
+				String 					externalised_address,
+				AESocksProxyAddress		_address )
+			{
+				connect_pool.run(
+						new AERunnable()
+						{
+							@Override
+							public void
+							runSupport()
+							{									
+								trace( "    delegating to I2P" );
+								
+								try{
+									
+										// remove the .i2p
+									
+									String new_externalised_address = externalised_address.substring( 0, externalised_address.length() - 4 );
+									
+										// update to use AEProxyFactory constants sometime
+									
+							        socket = connectToAddress( new_externalised_address, _address.getPort(), options );
+							       	
+							        proxy_connection.connected();
+							        
+							        if ( output != null ){
+							        	
+							        	output.put( "connected", true );
+							        }
+								}catch( Throwable e ){
+
+									setError( e );
+									
+									try{
+										proxy_connection.close();
+										
+									}catch( Throwable f ){
+										
+										f.printStackTrace();
+									}
+									
+										//e.printStackTrace();
+									
+									trace( "I2PSocket creation fails: " + Debug.getNestedExceptionMessage(e) );
+								}
+							}
+						});
 			}
 			
 			@Override
-			public boolean
-			write(
-				SocketChannel 		sc )
+			public void
+			relayData()
 			
 				throws IOException
 			{
+				synchronized( proxy_lock ){
 				
-				try{
+					if ( socket_closed ){
+					
+						throw( new IOException( "I2PPluginConnection::relayData: socket already closed"));
+					}
+				
+					relay_state = new ProxyStateRelayData( proxy_connection.getConnection());
+				}
+			}
+			
+			@Override
+			public void
+			close()
+			
+				throws IOException
+			{
+				synchronized( proxy_lock ){
+				
+					if ( socket != null && !socket_closed ){
+						
+						socket_closed	= true;
+					
+						if ( relay_state != null ){
+							
+							relay_state.close();
+						}
+						
+						final I2PSocket	f_socket	= socket;
+						
+						socket	= null;
+						
+						AEThread2 t = 
+							new AEThread2( "I2P SocketCloser" )
+							{
+								@Override
+								public void
+								run()
+								{
+									try{
+										f_socket.close();
+										
+									}catch( Throwable e ){
+										
+									}
+								}
+							};
+						
+						t.start();
+					}
+				}
+			}
+		
+			protected class
+			ProxyStateRelayData
+				implements AEProxyState
+			{
+				private static final boolean LOG_CONTENT = false;
+				
+				AEProxyConnection		connection;
+				ByteBuffer				source_buffer;
+				
+				volatile ByteBuffer		target_buffer;
+				
+				SocketChannel			source_channel;
+				
+				MessageInputStream		input_stream;
+				OutputStream			output_stream;
+				
+				long					outward_bytes	= 0;
+				long					inward_bytes	= 0;
+					
+				byte[]		i2p_input_buffer = new byte[RELAY_BUFFER_SIZE];
+				boolean		i2p_read_active;
+				boolean		i2p_read_deferred;
+				
+				boolean 	i2p_read_dead;
+	
+				Object lock = new Object();
+				
+				protected
+				ProxyStateRelayData(
+					AEProxyConnection	_connection )
+				
+					throws IOException
+				{		
+					// System.out.println( "Relay start: " + socket.getPeerDestination());
+	
+					connection	= _connection;
+					
+					source_channel	= connection.getSourceChannel();
+					
+					source_buffer	= ByteBuffer.allocate( RELAY_BUFFER_SIZE );
+					
+					input_stream 	= (MessageInputStream)socket.getInputStream();
+					output_stream 	= socket.getOutputStream();
+	
+					input_stream.setReadTimeout( 0 );	// non-blocking
+					
+					connection.setReadState( this );
+					
+					connection.setWriteState( this );
+					
+					connection.requestReadSelect( source_channel );
+								
+					connection.setConnected();
+					
+					input_stream.setActivityListener(
+						new ActivityListener(){
+							
+							@Override
+							public void 
+							activityOccurred()
+							{
+								readFromI2P();
+							}
+						});
+					
+					readFromI2P();
+				}
+				
+				/*
+				private void
+				tick()
+				{
+					try{
+						System.out.println( "    " + getStateName() + " - ready=" + input_stream.available());
+						
+					}catch( Throwable e ){
+						
+					}
+				}
+				*/
+				
+				private void
+				readFromI2P()
+				{
+					synchronized( lock ){
+						
+						if ( i2p_read_dead ){
+							
+							return;
+						}
+						
+						if ( i2p_read_active || target_buffer != null ){
+							
+							i2p_read_deferred = true;
+							
+							return;
+						}
+						
+						i2p_read_active = true;
+					}
+					
+					async_read_pool.run(
+						new AERunnable()
+						{
+							@Override
+							public void
+							runSupport()
+							{	
+								boolean	went_async = false;
+	
+								try{											
+									while( !connection.isClosed()){
+									
+										try{
+											trace( "I2PCon: " + getStateName() + " : read Starts <- I2P " );
+		
+											long	start = System.currentTimeMillis();
+											
+											int	len = input_stream.read( i2p_input_buffer );
+											
+											if ( len == 0 ){
+												
+												synchronized( lock ){
+													
+													if ( !i2p_read_deferred ){
+																									
+														went_async = true;
+														
+														return;
+													}
+													
+													i2p_read_deferred = false;
+												}
+												
+												continue;
+											}
+											
+											if ( len < 0 ){
+												
+												throw( new IOException( "Connection closed" ));
+											}
+																		
+											trace( "I2PCon: " + getStateName() + " : read Done <- I2P - " + len + ", elapsed = " + ( System.currentTimeMillis() - start ));
+											
+											if ( target_buffer != null ){
+												
+												Debug.out("I2PluginConnection: target buffer should be null" );
+											}
+											
+											// System.out.println( new String( buffer, 0, len ));
+											
+											target_buffer = ByteBuffer.wrap( i2p_input_buffer, 0, len );
+											
+											read();
+												
+											if ( target_buffer != null ){
+												
+												went_async = true;
+												
+												return;
+											}
+										}catch( Throwable e ){
+											
+											setError( e );
+											
+											boolean ignore = false;
+											
+											if ( 	e instanceof ClosedChannelException ||
+													e instanceof SocketTimeoutException ){
+												
+												ignore = true;
+												
+											}else if ( e instanceof IOException ){
+												
+												String message = Debug.getNestedExceptionMessage( e );
+												
+												if ( message != null ){
+													
+													message = message.toLowerCase( Locale.US );
+												
+													if (	message.contains( "closed" ) ||
+															message.contains( "aborted" ) ||
+															message.contains( "disconnected" ) ||
+															message.contains( "reset" )){
+											
+														ignore = true;
+													}
+												}
+											}
+											
+											if ( !ignore ){
+												
+												Debug.out( e );
+											}
+											
+											break;
+										}
+									}
+									
+									if ( !proxy_connection.isClosed()){
+										
+										try{
+											proxy_connection.close();
+											
+										}catch( IOException e ){
+											
+											Debug.printStackTrace(e);
+										}
+									}
+								}finally{
+								
+									synchronized( lock ){
+										
+										i2p_read_active = false;
+										
+										if (!went_async ){
+											
+											i2p_read_dead = true;
+										}
+										
+										if ( i2p_read_deferred ){
+											
+											i2p_read_deferred = false;
+											
+											readFromI2P();
+										}
+									}
+								}
+							}
+						});
+				}
+				
+				protected void
+				close()
+				{	
+					// System.out.println( "Relay end: " + socket.getPeerDestination());
+					
+					trace( "I2PCon: " + getStateName() + " close" );
+				}
+				
+				protected void
+				read()
+				
+					throws IOException
+				{
+						// data from I2P
+					
+					connection.setTimeStamp();
+				
 					if ( LOG_CONTENT ){
 						System.out.println( new String( target_buffer.array(), target_buffer.arrayOffset(), target_buffer.remaining()));
 					}
 					
 					int written = source_channel.write( target_buffer );
 						
+					trace( "I2PCon: " + getStateName() + " : write -> AZ - " + written );
+					
 					inward_bytes += written;
-						
-					trace( "I2PCon: " + getStateName() + " write -> AZ: " + written );
 					
 					if ( target_buffer.hasRemaining()){
-										
+					
 						connection.requestWriteSelect( source_channel );
 						
 					}else{
+					
+						target_buffer	= null;
+					}
+				}
+				
+				@Override
+				public boolean
+				read(
+					SocketChannel 		sc )
+				
+					throws IOException
+				{
+					if ( source_buffer.position() != 0 ){
 						
-						synchronized( lock ){
+						Debug.out( "I2PluginConnection: source buffer position invalid" );
+					}
+					
+						// data read from source
+					
+					connection.setTimeStamp();
+																	
+					final int	len = sc.read( source_buffer );
+			
+					if ( len == 0 ){
+						
+						return( false );
+					}
+					
+					if ( len == -1 ){
+						
+						throw( new EOFException( "read channel shutdown" ));
+						
+					}else{
+						
+						if ( source_buffer.position() > 0 ){
 							
-							target_buffer = null;
+							connection.cancelReadSelect( source_channel );
 							
-							readFromI2P();
+							trace( "I2PCon: " + getStateName() + " : read <- AZ - " + len );
+							
+								// offload the write to separate thread as can't afford to block the
+								// proxy
+						
+							async_write_pool.run(
+								new AERunnable()
+								{
+									@Override
+									public void
+									runSupport()
+									{
+										try{					
+											source_buffer.flip();
+											
+											long	start = System.currentTimeMillis();
+											
+											trace( "I2PCon: " + getStateName() + " : write Starts -> I2P - " + len );
+											
+												/*	The I2PTunnel code ends up spewing headers like this:
+												 	GET / HTTP/1.1
+													Host: ladedahdedededed.b32.i2p
+													Cookie: PHPSESSID=derptyderp
+													Cache-Control: max-age=0
+													Accept-Encoding: 
+													X-Accept-Encoding: x-i2p-gzip;q=1.0, identity;q=0.5, deflate;q=0, gzip;q=0, *;q=0
+													User-Agent: MYOB/6.66 (AN/ON)
+													Connection: close
+													
+													Some services insist on the referrer being removed otherwise the throw 'permission denied' errors
+													Also probably makes sense to switch the Host: record to always be the b32 address.
+													
+													Note the switch in accept-encoding. This doesn't appear to be required from some testing
+													I've done but again something to look out for
+													
+																								
+												 	I2PTunnelHTTPServer adds the following headers, might be worth a look one day
+											     	private static final String HASH_HEADER = "X-I2P-DestHash";
+											    	private static final String DEST64_HEADER = "X-I2P-DestB64";
+											    	private static final String DEST32_HEADER = "X-I2P-DestB32";
+										        	addEntry(headers, HASH_HEADER, peerHash.toBase64());
+										        	addEntry(headers, DEST32_HEADER, Base32.encode(peerHash.getData()) + ".b32.i2p");
+										        	addEntry(headers, DEST64_HEADER, socket.getPeerDestination().toBase64());
+	
+													str = str.replace( "Connection: keep-alive", "Connection: close" );
+	
+												 */
+											
+												// gonna be lazy here and assume that if this is an HTTP request then the
+												// headers are present in the initial buffer read
+											
+											byte[] 	array 			= source_buffer.array();
+											int		array_offset	= 0;
+											
+											if ( outward_bytes == 0 ){
+																					
+												for ( int i=0;i<len-3;i++){
+													
+													if ( 	array[i] 	== '\r' &&
+															array[i+1]	== '\n' &&
+															array[i+2]	== '\r' &&
+															array[i+3]	== '\n' ){
+														
+														String str = new String( array, 0, i+2, "ISO8859-1" );
+	
+														if ( LOG_CONTENT ){
+															System.out.println( str );
+														}
+														
+														String[] lines = str.split( "\r\n" );
+														
+														boolean is_http = false;
+														
+														List<String>	headers = new ArrayList<String>();
+														
+														for ( int j=0;j<lines.length;j++){
+														
+															String line = lines[j].trim();
+															
+															if ( j == 0 ){
+																
+																int pos1 = line.indexOf(' ');
+																int pos2 = line.lastIndexOf( ' ' );
+																
+																if ( pos1 != -1 && pos2 != -1 ){
+																	
+																	String method = line.substring( 0,  pos1 ).toUpperCase(Locale.US);
+																	
+																	if ( method.equals( "GET" ) || method.equals( "HEAD" ) || method.equals( "POST")){
+																		
+																		String protocol = line.substring( pos2 + 1 ).toUpperCase( Locale.US );
+																		
+																		if ( protocol.startsWith( "HTTP" )){
+																			
+																			is_http = true;
+																		}
+																	}
+																}
+															
+																if ( !is_http ){
+																	
+																	break;
+																	
+																}else{
+																	
+																	String url_part = line.substring( pos1+1, pos2 ).trim();
+																	
+																	int	pos = url_part.indexOf( '?' );
+																	
+																	if ( pos != -1 ){
+																																			
+																		String[]	args = url_part.substring( pos+1 ).split( "&" );
+																		
+																		Map<String,String> arg_map = new HashMap<String,String>();
+																		
+																		for ( String arg: args ){
+																			
+																			String[] bits = arg.split( "=", 2 );
+																			
+																			if ( bits.length == 2 ){
+																				String 	lhs = bits[0];
+																				String	rhs = bits[1];
+																				
+																				arg_map.put( lhs, rhs );
+																			}
+																		}
+																		
+																		if ( 	arg_map.containsKey( "info_hash" ) &&
+																				arg_map.containsKey( "peer_id" ) &&
+																				arg_map.containsKey( "uploaded" )){
+																			
+																			StringBuffer sb = new StringBuffer( 1024 );
+																			
+																			sb.append( line.substring( 0, pos + 1 + pos1 + 1 ));
+																			
+																			sb.append( "info_hash=" + arg_map.get( "info_hash" ));
+																			sb.append( "&peer_id=" + arg_map.get( "peer_id" ));
+																			sb.append( "&port=6881" );
+																			sb.append( "&ip=" + getSocketManager( options ).getMyDestination().toBase64() + ".i2p" );
+																			sb.append( "&uploaded=" + arg_map.get( "uploaded" ));
+																			sb.append( "&downloaded=" + arg_map.get( "downloaded" ));
+																			sb.append( "&left=" + arg_map.get( "left" ));
+																			sb.append( "&compact=1" );
+																			
+																			String event = arg_map.get( "event" );
+																			
+																			if ( event != null ){
+																				sb.append( "&event=" + event );
+																			}
+																			
+																			String num_want = arg_map.get( "numwant" );
+																			
+																			if ( num_want != null ){
+																				sb.append( "&numwant=" + num_want );
+																			}else{
+																				//if ( event != null )
+																			}
+																			
+																				// lastly patch in any existing url params
+																			
+																			PluginInterface pi = adapter.getPluginInterface();
+																					
+																			if ( pi != null ){
+																				
+																				try{
+																					byte[] hash = URLDecoder.decode(arg_map.get( "info_hash" ), "ISO-8859-1").getBytes( "ISO-8859-1" );
+																					
+																					Download dl = pi.getDownloadManager().getDownload( hash );
+																					
+																					if ( dl != null ){
+																					
+																						Torrent t = dl.getTorrent();
+																						
+																						if ( t != null ){
+																						
+																							List<URL>	urls = new ArrayList<URL>();
+																						
+																							urls.add( t.getAnnounceURL());
+																						
+																							for ( TorrentAnnounceURLListSet set: t.getAnnounceURLList().getSets()){
+																								
+																								urls.addAll( Arrays.asList(set.getURLs()));
+																							}
+																							
+																							for ( URL u: urls ){
+																								
+																								if ( u == null ){
+																									
+																									continue;
+																								}
+																								
+																								if ( u.getHost().equals( original_unresolved )){
+																									
+																									int	u_port = u.getPort();
+																									
+																									if ( u_port == -1 ){
+																										
+																										u_port = 80;
+																									}
+																									
+																									if ( u_port == original_port || u_port == 80 && original_port == -1 ){
+																										
+																										String query = u.getQuery();
+																										
+																										if ( query != null && query.length() > 0 ){
+																											
+																											sb.append( "&" + query );
+																											
+																											break;
+																										}
+																									}
+																								}
+																							}
+																						}
+																					}																				
+																				}catch( Throwable e ){
+																					
+																				}
+																			}
+																			
+																			sb.append( line.substring( pos2 ));
+																			
+																			line = sb.toString();
+																			
+																			// System.out.println( line );
+																		}
+																	}
+														
+																	headers.add( line );
+																}
+															}else{
+															
+																String[] bits = line.split( ":", 2 );
+																
+																if ( bits.length != 2 ){
+																	
+																	headers.add( line );
+																	
+																}else{
+																
+																	String	kw = bits[0].toUpperCase( Locale.US );
+																	
+																	if ( kw.equals( "REFERER" )){
+																		
+																		// skip it
+																		
+																	}else if ( kw.equals( "HOST" )){
+																		
+																		I2PSocket s = socket;
+																		
+																		Destination peer_dest = s==null?null:s.getPeerDestination();
+																		
+																		if ( peer_dest == null ){
+																			
+																			throw( new IOException( "Socked closed" ));
+																		}
+																		
+																		String target_host = bits[1];
+																		
+																		int port = 0;
+																		
+																		int	pos = target_host.indexOf( ':' );
+																		
+																		if ( pos != -1 ){
+																			
+																			port = Integer.parseInt( target_host.substring( pos+1 ));
+																		}
+																		
+																		String host_header =  "Host: " + Base32.encode( peer_dest.calculateHash().getData()) + ".b32.i2p";
+							
+																		if ( port > 0 ){
+																			
+																			host_header += ":" + port;
+																		}
+																		
+																		headers.add( host_header );
+																	
+																	}else if ( kw.equals( "USER-AGENT" )){
+		
+																		headers.add( "User-Agent: " + Constants.APP_NAME );
+	
+																	}else{
+																		
+																		headers.add( line );
+																	}
+																}
+															}
+														}
+														
+														if ( is_http ){
+															
+															StringBuilder sb = new StringBuilder( len+128 );
+															
+															for ( String header: headers ){
+																
+																sb.append( header );
+																sb.append( "\r\n" );
+															}
+															
+															sb.append( "\r\n" );
+															
+															String oh = sb.toString();
+															
+															//System.out.println( oh );
+															
+															byte[] output_headers = oh.getBytes( "ISO8859-1" );
+															
+															output_stream.write( output_headers );
+														
+															array_offset = i+4;
+														}
+														
+														break;
+													}																				
+												}
+											}
+											
+											int	rem = len - array_offset;
+											
+											if ( rem > 0 ){
+	
+												output_stream.write( array, array_offset, rem );
+											}
+											
+											source_buffer.position( 0 );
+											
+											source_buffer.limit( source_buffer.capacity());
+											
+											output_stream.flush();
+											
+											trace( "I2PCon: " + getStateName() + " : write done -> I2P - " + len + ", elapsed = " + ( System.currentTimeMillis() - start ));
+											
+											outward_bytes += len;
+											
+											connection.requestReadSelect( source_channel );								
+	
+										}catch( Throwable e ){
+											
+											setError( e );
+											
+											connection.failed( e );
+										}
+									}
+								});			
 						}
 					}
 					
-					return( written > 0 );
-					
-				}catch( Throwable e ){
-										
-					if (e instanceof IOException ){
-						
-						throw((IOException)e);
-					}
-					
-					throw( new IOException( "write fails: " + Debug.getNestedExceptionMessage(e)));
+					return( true );
 				}
-			}
-			
-			@Override
-			public boolean
-			connect(
-				SocketChannel	sc )
-			
-				throws IOException
-			{
-				throw( new IOException( "unexpected connect" ));
-			}
-			
-			@Override
-			public String
-			getStateName()
-			{
-				String	state = this.getClass().getName();
 				
-				int	pos = state.indexOf( "$");
+				@Override
+				public boolean
+				write(
+					SocketChannel 		sc )
 				
-				state = state.substring(pos+1);
+					throws IOException
+				{
+					
+					try{
+						if ( LOG_CONTENT ){
+							System.out.println( new String( target_buffer.array(), target_buffer.arrayOffset(), target_buffer.remaining()));
+						}
+						
+						int written = source_channel.write( target_buffer );
+							
+						inward_bytes += written;
+							
+						trace( "I2PCon: " + getStateName() + " write -> AZ: " + written );
+						
+						if ( target_buffer.hasRemaining()){
+											
+							connection.requestWriteSelect( source_channel );
+							
+						}else{
+							
+							synchronized( lock ){
+								
+								target_buffer = null;
+								
+								readFromI2P();
+							}
+						}
+						
+						return( written > 0 );
+						
+					}catch( Throwable e ){
+											
+						if (e instanceof IOException ){
+							
+							throw((IOException)e);
+						}
+						
+						throw( new IOException( "write fails: " + Debug.getNestedExceptionMessage(e)));
+					}
+				}
 				
-				return( state  +" [out=" + outward_bytes +",in=" + inward_bytes +"] " + (source_buffer==null?"":source_buffer.toString()) + " / " + target_buffer );
+				@Override
+				public boolean
+				connect(
+					SocketChannel	sc )
+				
+					throws IOException
+				{
+					throw( new IOException( "unexpected connect" ));
+				}
+				
+				@Override
+				public String
+				getStateName()
+				{
+					String	state = this.getClass().getName();
+					
+					int	pos = state.indexOf( "$");
+					
+					state = state.substring(pos+1);
+					
+					return( state  +" [out=" + outward_bytes +",in=" + inward_bytes +"] " + (source_buffer==null?"":source_buffer.toString()) + " / " + target_buffer );
+				}
 			}
 		}
 	}
