@@ -344,6 +344,13 @@ I2PHelperSocksProxy
 		try{
 			I2PSMHolder sm_holder = getSocketManager( options );
 
+			if ( sm_holder.isSessionClosed()){
+				
+				logit = false;
+				
+				throw( new Exception( "Session is closed" ));
+			}
+			
 			Destination remote_dest = sm_holder.lookupAddress( address, adapter );
 			
 			if ( remote_dest.getHash().equals( sm_holder.getMyDestination().getHash())){
@@ -639,6 +646,8 @@ I2PHelperSocksProxy
 	SOCKSProxyConnection
 		implements AESocksProxyPlugableConnection
 	{
+		private Object con_lock = new Object();
+		
 		private ProtocolImpl		impl;
 		private boolean				pc_closed;
 		
@@ -786,21 +795,43 @@ I2PHelperSocksProxy
 							protocol = (String)options.get( "protocol" );
 						}
 
-						synchronized( proxy_lock ){
+						synchronized( con_lock ){
 							
 							if ( pc_closed ){
 								
 								throw( new IOException( "Connection already closed" ));
 							}
+						}
 						
-							if ( protocol.equals( "TCP" )){
+						ProtocolImpl pi;
+						
+						if ( protocol.equals( "TCP" )){
 
-								impl = new TCPImpl( externalised_address, _address );
+							pi = new TCPImpl( externalised_address, _address );
 								
-							}else{
+						}else{
 								
-								impl = new UDPImpl( externalised_address, _address );
+							pi = new UDPImpl( externalised_address, _address );
+					
+						}
+						
+						boolean ok = false;
+						
+						synchronized( con_lock ){
+							
+							if ( !pc_closed ){
+								
+								impl = pi;
+								
+								ok = true;
 							}
+						}
+						
+						if ( !ok ){
+							
+							pi.close();
+							
+							throw( new IOException( "Connection already closed" ));
 						}
 						
 						handling_connection = true;
@@ -824,7 +855,7 @@ I2PHelperSocksProxy
 		{
 			ProtocolImpl i;
 			
-			synchronized( proxy_lock ){
+			synchronized( con_lock ){
 				
 				i = impl;
 			}
@@ -845,7 +876,7 @@ I2PHelperSocksProxy
 			try{
 				ProtocolImpl i;
 				
-				synchronized( proxy_lock ){
+				synchronized( con_lock ){
 					
 					pc_closed = true;
 					
@@ -988,7 +1019,7 @@ I2PHelperSocksProxy
 			
 				throws IOException
 			{
-				synchronized( proxy_lock ){
+				synchronized( con_lock ){
 					
 					if ( assoc_closed ){
 					
@@ -1004,7 +1035,7 @@ I2PHelperSocksProxy
 			
 				throws IOException
 			{
-				synchronized( proxy_lock ){
+				synchronized( con_lock ){
 					
 					if ( !assoc_closed ){
 						
@@ -1362,7 +1393,7 @@ I2PHelperSocksProxy
 			
 				throws IOException
 			{
-				synchronized( proxy_lock ){
+				synchronized( con_lock ){
 				
 					if ( socket_closed ){
 					
@@ -1379,7 +1410,7 @@ I2PHelperSocksProxy
 			
 				throws IOException
 			{
-				synchronized( proxy_lock ){
+				synchronized( con_lock ){
 				
 					if ( socket != null && !socket_closed ){
 						

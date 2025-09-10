@@ -57,6 +57,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -96,6 +97,7 @@ import com.biglybt.core.util.TimerEventPerformer;
 import com.biglybt.core.util.TimerEventPeriodic;
 import com.biglybt.core.util.TorrentUtils;
 import com.biglybt.core.util.UrlUtils;
+import com.biglybt.pif.Plugin;
 import com.biglybt.pif.PluginAdapter;
 import com.biglybt.pif.PluginConfig;
 import com.biglybt.pif.PluginEvent;
@@ -183,7 +185,7 @@ import com.biglybt.net.magneturi.MagnetURIHandlerProgressListener;
 
 public class 
 I2PHelperPlugin 
-	implements UnloadablePlugin, I2PHelperAdapter, com.biglybt.core.config.ParameterListener
+	implements Plugin, I2PHelperAdapter, com.biglybt.core.config.ParameterListener
 {	
 	/*
  		CHANGES REQUIRED
@@ -459,7 +461,7 @@ I2PHelperPlugin
 	private InputStream		lock_stream;
 	
 	private I2PHelperSocksProxy					socks_proxy;
-	private Map<Proxy,ProxyMapEntry>			proxy_map 				= new IdentityHashMap<Proxy, ProxyMapEntry>();
+	private Map<ProxyWrapper,ProxyMapEntry>		proxy_map 			= new ConcurrentHashMap<ProxyWrapper, ProxyMapEntry>();
 
 	private I2PHelperMessageHandler		message_handler;
 	
@@ -1576,34 +1578,31 @@ I2PHelperPlugin
 									log( stats );
 								}
 								
-								synchronized( I2PHelperPlugin.this ){
+								if ( proxy_map.size() > 0 ){
 									
-									if ( proxy_map.size() > 0 ){
+									long now = SystemTime.getMonotonousTime();
+									
+									Iterator<ProxyMapEntry>	it = proxy_map.values().iterator();
+									
+									while( it.hasNext()){
 										
-										long now = SystemTime.getMonotonousTime();
+										ProxyMapEntry entry = it.next();
 										
-										Iterator<ProxyMapEntry>	it = proxy_map.values().iterator();
-										
-										while( it.hasNext()){
+										if ( now - entry.getCreateTime() > 10*60*1000 ){
 											
-											ProxyMapEntry entry = it.next();
+											it.remove();
 											
-											if ( now - entry.getCreateTime() > 10*60*1000 ){
+											String	intermediate	= entry.getIntermediateHost();
+											
+											if ( intermediate != null ){
 												
-												it.remove();
-												
-												String	intermediate	= entry.getIntermediateHost();
-												
-												if ( intermediate != null ){
+												if ( socks_proxy != null ){
 													
-													if ( socks_proxy != null ){
-														
-														socks_proxy.removeIntermediateHost( intermediate );
-													}
+													socks_proxy.removeIntermediateHost( intermediate );
 												}
-												
-												Debug.out( "Removed orphaned proxy entry for " + entry.getHost() + ", " +entry.getCreator());
 											}
+											
+											Debug.out( "Removed orphaned proxy entry for " + entry.getHost() + ", " +entry.getCreator());
 										}
 									}
 								}
@@ -5347,38 +5346,35 @@ I2PHelperPlugin
 		
 		//System.out.println( "getProxy: " + reason + "/" + host + ":" + port + ", opt=" + getOptionsString( proxy_options ));
 		
-		synchronized( this ){
-			
-			if ( unloaded ){
+		if ( unloaded ){
 				
-				return( null );
-			}
+			return( null );
+		}
 
-			I2PHelperSocksProxy socks_proxy = getSocksProxy();
-				
-			try{
-				int intermediate_port = socks_proxy.getPort();
-				
-				Map<String,Object>	output = new HashMap<>();
-				
-				String intermediate_host = socks_proxy.getIntermediateHost( host, proxy_options, output );
-		
-				Proxy proxy = new Proxy( Proxy.Type.SOCKS, new InetSocketAddress( "127.0.0.1", intermediate_port ));	
-								
-				proxy_map.put( proxy, new ProxyMapEntry( host, intermediate_host, output ));
-		
-				//System.out.println( "proxy_map=" + proxy_map.size());
-				
-				//last_use_time	= SystemTime.getMonotonousTime();
+		I2PHelperSocksProxy socks_proxy = getSocksProxy();
+			
+		try{
+			int intermediate_port = socks_proxy.getPort();
+			
+			Map<String,Object>	output = new HashMap<>();
+			
+			String intermediate_host = socks_proxy.getIntermediateHost( host, proxy_options, output );
 	
-				//proxy_request_count.incrementAndGet();
-					
-				return( new Object[]{ proxy, intermediate_host, port });
+			Proxy proxy = new Proxy( Proxy.Type.SOCKS, new InetSocketAddress( "127.0.0.1", intermediate_port ));	
+							
+			proxy_map.put( new ProxyWrapper(proxy), new ProxyMapEntry( host, intermediate_host, output ));
+	
+			//System.out.println( "proxy_map=" + proxy_map.size());
+			
+			//last_use_time	= SystemTime.getMonotonousTime();
+
+			//proxy_request_count.incrementAndGet();
 				
-			}catch( Throwable e ){
-				
-				throw( new IPCException( e ));
-			}
+			return( new Object[]{ proxy, intermediate_host, port });
+			
+		}catch( Throwable e ){
+			
+			throw( new IPCException( e ));
 		}
 	}
 	
@@ -5426,11 +5422,8 @@ I2PHelperPlugin
 				if ( active_http_proxy != null ){
 					
 					Proxy proxy = new Proxy( active_http_proxy.type(), active_http_proxy.address());
-					
-					synchronized( this ){
-						
-						proxy_map.put( proxy, new ProxyMapEntry( host, null, null ));
-					}
+											
+					proxy_map.put( new ProxyWrapper(proxy), new ProxyMapEntry( host, null, null ));
 					
 					log( "HTTP Proxy request for " + url );
 					
@@ -5447,41 +5440,38 @@ I2PHelperPlugin
 		}
 						
 		// System.out.println( "getProxy: " + reason + "/" + url + ", opt=" + getOptionsString( proxy_options ));
-		
-		synchronized( this ){
-			
-			if ( unloaded ){
-				
-				return( null );
-			}
-
-			I2PHelperSocksProxy socks_proxy = getSocksProxy();
-			
-			try{
-				int intermediate_port = socks_proxy.getPort();
-				
-				Map<String,Object>	output = new HashMap<>();
-
-				String intermediate_host = socks_proxy.getIntermediateHost( host, proxy_options, output );
-		
-				Proxy proxy = new Proxy( Proxy.Type.SOCKS, new InetSocketAddress( "127.0.0.1", intermediate_port ));	
-								
-				proxy_map.put( proxy, new ProxyMapEntry( host, intermediate_host, output ));
-		
-				//System.out.println( "proxy_map=" + proxy_map.size());
-	
-				//last_use_time	= SystemTime.getMonotonousTime();
-	
-				//proxy_request_count.incrementAndGet();
 					
-				url = UrlUtils.setHost( url, intermediate_host );
+		if ( unloaded ){
+				
+			return( null );
+		}
+
+		I2PHelperSocksProxy socks_proxy = getSocksProxy();
+		
+		try{
+			int intermediate_port = socks_proxy.getPort();
+			
+			Map<String,Object>	output = new HashMap<>();
+
+			String intermediate_host = socks_proxy.getIntermediateHost( host, proxy_options, output );
 	
-				return( new Object[]{ proxy, url, host });
+			Proxy proxy = new Proxy( Proxy.Type.SOCKS, new InetSocketAddress( "127.0.0.1", intermediate_port ));	
+							
+			proxy_map.put( new ProxyWrapper( proxy), new ProxyMapEntry( host, intermediate_host, output ));
+	
+			//System.out.println( "proxy_map=" + proxy_map.size());
+
+			//last_use_time	= SystemTime.getMonotonousTime();
+
+			//proxy_request_count.incrementAndGet();
 				
-			}catch( Throwable e ){
-				
-				throw( new IPCException( e ));
-			}
+			url = UrlUtils.setHost( url, intermediate_host );
+
+			return( new Object[]{ proxy, url, host });
+			
+		}catch( Throwable e ){
+			
+			throw( new IPCException( e ));
 		}
 	}
 	
@@ -5491,38 +5481,35 @@ I2PHelperPlugin
 		boolean		good )
 	{
 		ProxyMapEntry	entry;
-		
-		synchronized( this ){
-			
-			entry = proxy_map.remove( proxy );
-		
-			if ( entry != null ){
 					
-				if ( proxy.type() == Proxy.Type.HTTP ){
-				
-					if ( good ){
-						
-						http_proxy_request_ok.incrementAndGet();
-						
-					}else{
-						
-						http_proxy_request_failed.incrementAndGet();
-					}
-				}
-				
-				String	intermediate	= entry.getIntermediateHost();
+		entry = proxy_map.remove( new ProxyWrapper(proxy ));
 	
-				if ( intermediate != null ){
-					
-					if ( socks_proxy != null ){
-						
-						socks_proxy.removeIntermediateHost( intermediate );
-					}
-				}
-			}else{
+		if ( entry != null ){
+				
+			if ( proxy.type() == Proxy.Type.HTTP ){
 			
-				Debug.out( "Proxy entry missing!" );
+				if ( good ){
+					
+					http_proxy_request_ok.incrementAndGet();
+					
+				}else{
+					
+					http_proxy_request_failed.incrementAndGet();
+				}
 			}
+			
+			String	intermediate	= entry.getIntermediateHost();
+
+			if ( intermediate != null ){
+				
+				if ( socks_proxy != null ){
+					
+					socks_proxy.removeIntermediateHost( intermediate );
+				}
+			}
+		}else{
+		
+			Debug.out( "Proxy entry missing!" );
 		}
 	}
 	
@@ -5530,14 +5517,11 @@ I2PHelperPlugin
 	getProxyStatus(
 		Proxy		proxy )
 	{
-		synchronized( this ){
-			
-			ProxyMapEntry entry = proxy_map.get( proxy );
+		ProxyMapEntry entry = proxy_map.get( new ProxyWrapper( proxy ));
 		
-			if ( entry != null ){
+		if ( entry != null ){
 				
-				return( entry.output );
-			}
+			return( entry.output );
 		}
 		
 		return( null );
@@ -6211,13 +6195,6 @@ I2PHelperPlugin
 	}
 		
 		// End IPC
-	
-	@Override
-	public void
-	unload()
-	{
-		unload( false );
-	}
 	
 	public void
 	unload(
@@ -7090,6 +7067,33 @@ outer:
 				
 				selector.stopProcessing();
 			}
+		}
+	}
+	
+	private class
+	ProxyWrapper
+	{
+		public final Proxy		proxy;
+		
+		ProxyWrapper(
+			Proxy		p )
+		{
+			proxy = p;
+		}
+		
+		@Override
+		public int 
+		hashCode()
+		{
+			return( proxy.hashCode());
+		}
+		
+		@Override
+		public boolean 
+		equals(
+			Object obj)
+		{
+			return((obj instanceof ProxyWrapper) && proxy == ((ProxyWrapper)obj).proxy );
 		}
 	}
 }
