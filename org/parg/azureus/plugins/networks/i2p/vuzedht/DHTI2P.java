@@ -76,6 +76,7 @@ DHTI2P
 		
 	private final File					dir;
 	private final int					dht_index;
+	private final boolean				is_secondary;
 	private DHT 						dht;
 	private DHTTransportI2P				transport;
 	private DHTPluginStorageManager 	storage_manager;
@@ -118,17 +119,21 @@ DHTI2P
 	DHTI2P(
 		File				_dir,
 		int					_dht_index,
+		boolean				_is_secondary,
 		I2PSMHolder			sm_holder,
 		NodeInfo			_my_node,
 		NodeInfo			boot_node,
 		I2PHelperAdapter	_adapter )
 	{
-		dir			= _dir;
-		dht_index	= _dht_index;
-		my_node		= _my_node;
-		adapter		= _adapter;
+		dir				= _dir;
+		dht_index		= _dht_index;
+		is_secondary	= _is_secondary;
+		my_node			= _my_node;
+		adapter			= _adapter;
 		
-		File storage_dir = new File( dir, "dhtdata" + (dht_index==0?"":String.valueOf(dht_index)));
+		String suffix = is_secondary?"_s":"";
+		
+		File storage_dir = new File( dir, "dhtdata" + (dht_index==0?"":String.valueOf(dht_index)) + suffix);
 		
 		if ( !storage_dir.isDirectory()){
 		
@@ -255,7 +260,7 @@ DHTI2P
 	log(
 		String	str )
 	{
-		adapter.log( dht_index + ": " + str );
+		adapter.log( dht_index + (is_secondary?"_s":"") + ": " + str );
 	}
 		
 	@Override
@@ -263,7 +268,7 @@ DHTI2P
 	log(
 		Throwable	e )
 	{
-		adapter.log( dht_index + ": " + Debug.getNestedExceptionMessage(e));
+		adapter.log( dht_index + (is_secondary?"_s":"") +": " + Debug.getNestedExceptionMessage(e));
 	}
 	
 	@Override
@@ -272,7 +277,7 @@ DHTI2P
 		int		log_type,
 		String	str )
 	{
-		adapter.log( dht_index + ": " + str );
+		adapter.log( dht_index + (is_secondary?"_s":"") +": " + str );
 	}
 	
 	@Override

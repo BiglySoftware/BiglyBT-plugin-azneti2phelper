@@ -71,6 +71,7 @@ import com.biglybt.core.util.BDecoder;
 import com.biglybt.core.util.BEncoder;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
+import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.ThreadPool;
 import com.biglybt.net.udp.uc.PRUDPPacket;
@@ -517,9 +518,19 @@ I2PHelperSocksProxy
 			return( true );
 		}
 			
+		boolean
+		hasTransaction(
+			int		transaction_id )
+		{
+			synchronized( transactions ){
+				
+				return( transactions.containsKey( transaction_id ));
+			}
+		}
+		
 		void
 		removeTransaction(
-			int					transaction_id )
+			int		transaction_id )
 		{
 			synchronized( transactions ){
 				
@@ -603,6 +614,7 @@ I2PHelperSocksProxy
 		disconnected(
 			I2PSession session)
 		{
+			Debug.out( "Disconnected" );
 		}
 		
 		@Override
@@ -612,6 +624,7 @@ I2PHelperSocksProxy
 			String		message, 
 			Throwable	error)
 		{
+			Debug.out( error );
 		}
 		
 		@Override
@@ -1092,6 +1105,87 @@ I2PHelperSocksProxy
 					connection.setConnected();
 				}
 			
+				private void
+				sendWithRetry(
+					byte[]			original_packet,
+					int				proto,
+					int				transaction_id,
+					boolean			initial_send,
+					int				delay_millis )
+				
+					throws Exception
+				{
+					if ( !initial_send ){
+						
+						if ( !sm_holder_wrapper.hasTransaction(transaction_id)){
+							
+							return;
+						}
+					}
+					
+					if ( connection.isClosed()){
+						
+						return;
+					}
+					
+					byte[] packet = sm_holder.makeI2PDatagram( proto, remote_dest, original_packet );
+		            
+					SendMessageOptions opts = new SendMessageOptions();
+					
+					opts.setDate( SystemTime.getCurrentTime() + 60*1000 );
+
+					opts.setSendLeaseSet( proto == I2PSession.PROTO_DATAGRAM2 );
+					
+					if ( initial_send && !sm_holder_wrapper.addTransaction( transaction_id, this )){
+						
+						throw( new Exception( "Duplicate transaction id" ));
+					}
+					
+					boolean sent = false;
+					
+					try{
+						if ( sm_holder.sendMessage(
+								remote_dest,
+								packet,
+								0,
+								packet.length,
+								proto,
+								UDP_PORT,
+								address.getPort(),
+								opts )){
+							
+							outward_bytes += packet.length;
+							
+							sent = true;
+							
+							int next_delay = Math.min( delay_millis + 5*1000, 15*1000 );
+
+							SimpleTimer.addEvent(
+									"UDPTrackerRetry",
+									SystemTime.getOffsetTime( next_delay ),
+									(ev)->{
+										try{
+											//System.out.println( "retry: " + transaction_id );
+																						
+											sendWithRetry( packet, proto, transaction_id, false, next_delay );
+											
+										}catch( Throwable e ){
+											
+										}
+									});
+						}else{
+							
+							throw( new IOException( "sendMessage failed" ));
+						}
+					}finally{
+						
+						if ( !sent ){
+							
+							sm_holder_wrapper.removeTransaction( transaction_id );
+						}
+					}
+				}
+				
 				public boolean
 				read(
 					SocketChannel 		sc )
@@ -1148,47 +1242,7 @@ I2PHelperSocksProxy
 									
 									int proto = udp_connected?I2PSession.PROTO_DATAGRAM3:I2PSession.PROTO_DATAGRAM2;
 									
-									packet = sm_holder.makeI2PDatagram( proto, remote_dest, packet );
-					            
-									SendMessageOptions opts = new SendMessageOptions();
-									
-									opts.setDate( SystemTime.getCurrentTime() + 60*1000 );
-
-									opts.setSendLeaseSet( proto == I2PSession.PROTO_DATAGRAM2 );
-									
-									if ( !sm_holder_wrapper.addTransaction( transaction_id, this )){
-										
-										throw( new Exception( "Duplicate transaction id" ));
-									}
-									
-									boolean sent = false;
-									
-									try{
-										if ( sm_holder.sendMessage(
-												remote_dest,
-												packet,
-												0,
-												packet.length,
-												proto,
-												UDP_PORT,
-												address.getPort(),
-												opts )){
-											
-											outward_bytes += packet.length;
-											
-											sent = true;
-											
-										}else{
-											
-											throw( new IOException( "sendMessage failed" ));
-										}
-									}finally{
-										
-										if ( !sent ){
-											
-											sm_holder_wrapper.removeTransaction( transaction_id );
-										}
-									}
+									sendWithRetry( packet, proto, transaction_id, true, 0 );
 									
 								}catch( Throwable e ){
 									
