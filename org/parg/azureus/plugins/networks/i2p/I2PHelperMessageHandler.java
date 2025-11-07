@@ -247,7 +247,7 @@ I2PHelperMessageHandler
 						private byte[] torrent_hash;
 						
 						@Override
-						public void protocolBytesReceived(int byte_count) {
+						public void protocolBytesReceived(long byte_count) {
 						}
 						
 						@Override
@@ -437,7 +437,7 @@ I2PHelperMessageHandler
 						
 						@Override
 						public void 
-						dataBytesReceived(int byte_count) 
+						dataBytesReceived(long byte_count) 
 						{
 							data_bytes_received += byte_count;
 						}
@@ -520,7 +520,7 @@ I2PHelperMessageHandler
 						private byte[] torrent_hash;
 						
 						@Override
-						public void protocolBytesReceived(int byte_count) {
+						public void protocolBytesReceived(long byte_count) {
 						}
 						
 						@Override
@@ -565,7 +565,7 @@ I2PHelperMessageHandler
 						
 						@Override
 						public void 
-						dataBytesReceived(int byte_count) 
+						dataBytesReceived(long byte_count) 
 						{
 							data_bytes_received += byte_count;
 						}

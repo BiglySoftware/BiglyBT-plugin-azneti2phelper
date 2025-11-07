@@ -127,6 +127,7 @@ import com.biglybt.pif.ui.config.ActionParameter;
 import com.biglybt.pif.ui.config.BooleanParameter;
 import com.biglybt.pif.ui.config.InfoParameter;
 import com.biglybt.pif.ui.config.IntParameter;
+import com.biglybt.pif.ui.config.LongParameter;
 import com.biglybt.pif.ui.config.Parameter;
 import com.biglybt.pif.ui.config.ParameterGroup;
 import com.biglybt.pif.ui.config.ParameterListener;
@@ -694,8 +695,8 @@ I2PHelperPlugin
 			
 			final BooleanParameter link_rates_param = config_model.addBooleanParameter2( "azi2phelper.link.rates", "azi2phelper.link.rates", false );
 			
-			final IntParameter up_limit_param 			= config_model.addIntParameter2( I2PHelperRouter.PARAM_SEND_KBS, I2PHelperRouter.PARAM_SEND_KBS, I2PHelperRouter.PARAM_SEND_KBS_DEFAULT, 0, Integer.MAX_VALUE );
-			final IntParameter down_limit_param 		= config_model.addIntParameter2( I2PHelperRouter.PARAM_RECV_KBS, I2PHelperRouter.PARAM_RECV_KBS, I2PHelperRouter.PARAM_RECV_KBS_DEFAULT, 0, Integer.MAX_VALUE );
+			final LongParameter up_limit_param 			= config_model.addLongParameter2( I2PHelperRouter.PARAM_SEND_KBS, I2PHelperRouter.PARAM_SEND_KBS, I2PHelperRouter.PARAM_SEND_KBS_DEFAULT, 0, Long.MAX_VALUE );
+			final LongParameter down_limit_param 		= config_model.addLongParameter2( I2PHelperRouter.PARAM_RECV_KBS, I2PHelperRouter.PARAM_RECV_KBS, I2PHelperRouter.PARAM_RECV_KBS_DEFAULT, 0, Long.MAX_VALUE );
 			
 			final IntParameter limit_multiplier_param 	= config_model.addIntParameter2( "azi2phelper.rate.multiplier", "azi2phelper.rate.multiplier", 2, 1, 100 );
 			limit_multiplier_param.setMinimumRequiredUserMode( Parameter.MODE_ADVANCED );
@@ -765,9 +766,9 @@ I2PHelperPlugin
 							}
 						}
 						
-						int dl_limit = NetworkManager.getMaxDownloadRateBPS() / 1024;
+						long dl_limit = NetworkManager.getMaxDownloadRateBPS() / 1024;
 						
-						int ul_limit;
+						long ul_limit;
 						
 						if (NetworkManager.isSeedingOnlyUploadRate()){
 							
